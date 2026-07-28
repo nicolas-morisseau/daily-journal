@@ -1,0 +1,80 @@
+# Build and publish a release for a tag.
+#
+# Two ways in, both landing on the same job:
+#
+#   - pushing a semver tag by hand, for a release outside the normal flow
+#   - being called by tag.yml, which computes the version when a pull request
+#     is merged
+#
+# The second exists because a tag pushed with the default GITHUB_TOKEN does not
+# trigger workflows — GitHub suppresses that to avoid loops — so tag.yml calls
+# this one directly instead of hoping the push event fires.
+name: release
+
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+  workflow_call:
+    inputs:
+      tag:
+        description: The tag to release, e.g. 1.2.3
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve the tag
+        id: tag
+        env:
+          # `inputs.tag` when called, the pushed ref otherwise.
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "'$TAG' is not a semver tag; expected something like 1.2.3" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          # Build the tag, not a branch tip that may already have moved.
+          ref: ${{ steps.tag.outputs.tag }}
+          # GoReleaser reads the whole log for the changelog.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # go test runs inside GoReleaser's before hooks; gofmt does not, and a
+      # release is the last place to discover a formatting slip.
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; false; }
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          # Publishes the release here.
+          GITHUB_TOKEN: ${{ github.token }}
+          # Commits the formula to nicolas-morisseau/homebrew-tap, which
+          # github.token cannot write to. A deploy key on that repository,
+          # passphrase-free; see docs/RELEASING.md.
+          HOMEBREW_TAP_SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          {
+            echo "### Released \`$TAG\`"
+            echo
+            echo "- [release notes](${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG)"
+            echo "- \`brew update && brew upgrade daily-journal\`"
+          } >> "$GITHUB_STEP_SUMMARY"

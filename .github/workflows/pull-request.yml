@@ -1,0 +1,42 @@
+# Gate on every pull request. Both jobs are meant to be required checks in the
+# branch protection of `main`, which is what makes the release label mandatory.
+name: pull-request
+
+on:
+  pull_request:
+    branches: [main]
+    # labeled/unlabeled matter: adding the missing label must re-run the gate
+    # rather than leaving a stale red check.
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  release-label:
+    name: release label
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The same script the release uses to decide the bump, so a pull request
+      # can never pass this gate and then fail to release.
+      - name: Require exactly one of major, minor, patch
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          bump="$(printf '%s' "$LABELS" | .github/scripts/bump-from-labels.sh)"
+          echo "This pull request will release a **$bump** version." >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; false; }
+      - run: go test ./...

@@ -1,0 +1,158 @@
+package cli
+
+import "strings"
+
+// openCommand is the default: open one entry in the editor.
+type openCommand struct{}
+
+func (openCommand) Name() string    { return "open" }
+func (openCommand) Usage() string   { return "open [DATE]" }
+func (openCommand) Summary() string { return "Open an entry in your editor (default: today)" }
+
+func (openCommand) Flags() []Flag {
+	return []Flag{
+		{Long: "last", Help: "Open the most recent entry instead of a date"},
+	}
+}
+
+func (openCommand) Run(a *App, flags FlagValues, operands []string) error {
+	// A date can arrive as several words: `journal open last friday`.
+	date := strings.Join(operands, " ")
+	last := flags.Bool("last")
+	if last && date != "" {
+		return usagef("--last cannot be combined with a date")
+	}
+	return a.openEntry(date, last)
+}
+
+// addCommand appends a line without opening the editor. It is what runs for the
+// bare `journal "a thought"` form.
+type addCommand struct{}
+
+func (addCommand) Name() string    { return "add" }
+func (addCommand) Usage() string   { return "add [--date DATE] TEXT..." }
+func (addCommand) Summary() string { return "Append a timestamped line without opening the editor" }
+func (addCommand) FreeText()       {}
+
+func (addCommand) Flags() []Flag {
+	return []Flag{
+		{Long: "date", Short: "d", Arg: "DATE", Help: "Entry to append to (default: today)"},
+	}
+}
+
+func (addCommand) Run(a *App, flags FlagValues, operands []string) error {
+	text := strings.Join(operands, " ")
+	if strings.TrimSpace(text) == "" {
+		return usagef("nothing to add: give the text to append")
+	}
+	return a.quickCapture(flags.String("date"), text)
+}
+
+// searchCommand runs a full-text search, optionally narrowed by tag.
+type searchCommand struct{}
+
+func (searchCommand) Name() string  { return "search" }
+func (searchCommand) Usage() string { return "search [--tag TAG]... QUERY..." }
+func (searchCommand) Summary() string {
+	return "Search the text of every entry, optionally within tags"
+}
+
+func (searchCommand) Flags() []Flag {
+	return []Flag{
+		{
+			Long: "tag", Arg: "TAG", Repeatable: true,
+			Help: "Only entries carrying #TAG; repeat to require several",
+		},
+	}
+}
+
+func (searchCommand) Run(a *App, flags FlagValues, operands []string) error {
+	query := strings.Join(operands, " ")
+	if strings.TrimSpace(query) == "" {
+		return usagef("nothing to search for: give a query")
+	}
+	return a.search(query, flags.Strings("tag"))
+}
+
+// weekCommand opens the current week's entries.
+type weekCommand struct{}
+
+func (weekCommand) Name() string    { return "week" }
+func (weekCommand) Usage() string   { return "week" }
+func (weekCommand) Summary() string { return "Open every entry from the current week" }
+func (weekCommand) Flags() []Flag   { return nil }
+
+func (weekCommand) Run(a *App, _ FlagValues, operands []string) error {
+	if err := noOperands("week", operands); err != nil {
+		return err
+	}
+	return a.week()
+}
+
+// calendarCommand shows a month at a glance.
+type calendarCommand struct{}
+
+func (calendarCommand) Name() string    { return "calendar" }
+func (calendarCommand) Usage() string   { return "calendar [YYYY-MM]" }
+func (calendarCommand) Summary() string { return "Month calendar with entry indicators" }
+func (calendarCommand) Flags() []Flag   { return nil }
+
+func (calendarCommand) Run(a *App, _ FlagValues, operands []string) error {
+	if len(operands) > 1 {
+		return usagef("calendar takes at most one month")
+	}
+	month := ""
+	if len(operands) == 1 {
+		month = operands[0]
+	}
+	return a.calendar(month)
+}
+
+// versionCommand reports the build, which is what a bug report needs.
+type versionCommand struct{}
+
+func (versionCommand) Name() string    { return "version" }
+func (versionCommand) Usage() string   { return "version" }
+func (versionCommand) Summary() string { return "Print the version of this build" }
+func (versionCommand) Flags() []Flag   { return nil }
+
+func (versionCommand) Run(a *App, _ FlagValues, operands []string) error {
+	if err := noOperands("version", operands); err != nil {
+		return err
+	}
+	a.Printer.Println(a.Build.String())
+	return nil
+}
+
+// helpCommand documents the tool.
+type helpCommand struct{}
+
+func (helpCommand) Name() string    { return "help" }
+func (helpCommand) Usage() string   { return "help [COMMAND]" }
+func (helpCommand) Summary() string { return "Show help for the tool or for one command" }
+func (helpCommand) Flags() []Flag   { return nil }
+
+func (helpCommand) Run(a *App, _ FlagValues, operands []string) error {
+	switch len(operands) {
+	case 0:
+		a.showHelp()
+		return nil
+	case 1:
+		cmd, ok := Lookup(operands[0])
+		if !ok {
+			return usagef("unknown command %q\nRun 'journal help' for the command list", operands[0])
+		}
+		a.showCommandHelp(cmd)
+		return nil
+	default:
+		return usagef("help takes at most one command name")
+	}
+}
+
+// noOperands rejects stray arguments on commands that take none.
+func noOperands(name string, operands []string) error {
+	if len(operands) == 0 {
+		return nil
+	}
+	return usagef("%s takes no arguments, got %q", name, strings.Join(operands, " "))
+}

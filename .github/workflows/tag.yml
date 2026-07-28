@@ -1,0 +1,68 @@
+# Turn a merged pull request into a tag, then release it.
+#
+# The version comes from the newest version tag, bumped by the pull request's
+# major/minor/patch label — the label pull-request.yml makes mandatory. Tagging
+# and releasing are separate on purpose: release.yml also answers to a tag
+# pushed by hand, so a release never depends on going through a pull request.
+name: tag
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    # `closed` also fires when a pull request is abandoned.
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.next }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The merge commit, not the pull request head: that is what gets tagged.
+          ref: main
+          # The version calculation needs every tag.
+          fetch-depth: 0
+
+      - name: Work out the version
+        id: version
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          bump="$(printf '%s' "$LABELS" | .github/scripts/bump-from-labels.sh)"
+          current="$(git tag --list '[0-9]*' --sort=-version:refname | head -n1)"
+          next="$(.github/scripts/next-version.sh "$bump")"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Tagging \`$next\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| previous | \`${current:-none}\` |"
+            echo "| bump | \`$bump\` |"
+            echo "| pull request | #${{ github.event.pull_request.number }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Push the tag
+        env:
+          TAG: ${{ steps.version.outputs.next }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+  release:
+    needs: tag
+    permissions:
+      contents: write
+    # Same workflow a manual tag push runs, so there is one release path.
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}

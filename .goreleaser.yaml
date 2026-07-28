@@ -1,0 +1,113 @@
+# GoReleaser builds the binaries, publishes the GitHub release and updates the
+# Homebrew formula in nicolas-morisseau/homebrew-tap, a separate shared tap.
+#
+#   goreleaser check                       validate this file
+#   goreleaser release --snapshot --clean  build everything locally, publish nothing
+version: 2
+
+project_name: daily-journal
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: journal
+    main: ./cmd/journal
+    # The command is `journal`; the project is daily-journal.
+    binary: journal
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: journal
+    ids: [journal]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  # Every release keeps its binaries, which is how a user installs an older
+  # version without any of this tooling.
+  draft: false
+  prerelease: auto
+
+# A formula rather than a cask, deliberately. Homebrew quarantines everything a
+# cask downloads, and macOS kills a quarantined binary that is only ad-hoc
+# signed — which is what the Go linker produces, short of a paid Developer ID
+# and notarisation. The symptom is a silent SIGKILL, exit 137, no message.
+# Formulae are never quarantined, and unlike casks they also work on Linux.
+#
+# GoReleaser deprecated `brews` in favour of `homebrew_casks`: it still works in
+# v2 and, per their policy, only goes away in v3 — release.yml pins `~> v2`.
+# When v3 comes: either notarise the binaries, or generate the formula here.
+# One catch today: `goreleaser check` fails on a deprecated option.
+brews:
+  - name: daily-journal
+    ids: [journal]
+    # A shared tap, not this repository: `homebrew-tap` is the name `brew tap
+    # nicolas-morisseau/tap` resolves to, and it can hold other tools later.
+    #
+    # Writing to another repository needs its own credential, because the
+    # workflow's GITHUB_TOKEN is scoped to this one. `git` pushes over SSH with
+    # a deploy key rather than through the API with a token: a deploy key does
+    # not expire, belongs to the tap alone, and is not tied to a user account.
+    # GoReleaser writes the key to a temporary file and calls ssh itself, so
+    # nothing has to set up an agent. The key must have no passphrase.
+    repository:
+      owner: nicolas-morisseau
+      name: homebrew-tap
+      branch: main
+      git:
+        url: git@github.com:nicolas-morisseau/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_SSH_KEY }}"
+    directory: Formula
+    homepage: https://github.com/nicolas-morisseau/daily-journal
+    description: Terminal journal with one markdown file per day, kept in git
+    license: MIT
+    # Explicit, though GoReleaser guesses the same thing from the archive.
+    install: |
+      bin.install "journal"
+    # `brew test daily-journal`, and what homebrew/core would run on a bump.
+    test: |
+      system "#{bin}/journal", "--version"
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    # The message of the commit made in the tap repository, not in this one.
+    commit_msg_template: "Formula: {{ .ProjectName }} {{ .Tag }}"
+    # journalot, the bash tool this grew out of, is a formula installing the same
+    # `journal` command. As a formula this can be declared outright, so Homebrew
+    # refuses the install instead of letting the two fight over the symlink.
+    conflicts:
+      - journalot
+    caveats: |
+      journalot provides the same `journal` command, so the two cannot be
+      installed together. Remove it with:
+        brew uninstall journalot && brew untap jtaylortech/journalot
+      daily-journal reads the same journal.
