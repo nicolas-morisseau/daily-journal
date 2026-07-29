@@ -14,10 +14,11 @@ import (
 // Keys recognised in the config file. Anything else is ignored, which keeps
 // older or hand-edited config files working.
 const (
-	KeyJournalDir = "JOURNAL_DIR"
-	KeyGitBranch  = "GIT_BRANCH"
-	KeyAutosync   = "AUTOSYNC"
-	KeyEditor     = "EDITOR"
+	KeyJournalDir  = "JOURNAL_DIR"
+	KeyGitBranch   = "GIT_BRANCH"
+	KeyAutosync    = "AUTOSYNC"
+	KeyEditor      = "EDITOR"
+	KeySprintStart = "SPRINT_START"
 )
 
 // AppName names the config directory under $XDG_CONFIG_HOME.
@@ -44,6 +45,12 @@ type Config struct {
 	// Editor is EDITOR as seen by the script: the environment variable, or an
 	// override from the config file.
 	Editor string
+
+	// SprintStart is the first day of any one sprint, as written in the config
+	// file. `journal review` counts its fixed windows from it; empty leaves the
+	// window rolling with today. It is kept unparsed so that a typo fails the one
+	// command that reads it rather than every command.
+	SprintStart string
 
 	// Path is the config file location, whether or not it exists.
 	Path string
@@ -153,6 +160,9 @@ func (c *Config) apply(vars *shellVars) {
 	}
 	if v, ok := vars.get(KeyAutosync); ok {
 		c.Autosync = v == "true"
+	}
+	if v, ok := vars.get(KeySprintStart); ok {
+		c.SprintStart = v
 	}
 }
 

@@ -14,6 +14,8 @@ var examples = [][2]string{
 	{`journal open yesterday`, "Any date expression works"},
 	{`journal open "last friday"`, ""},
 	{`journal calendar`, "Browse the month, read and edit entries"},
+	{`journal review`, "Good, bad and mad over the last two weeks"},
+	{`journal review --weeks 3`, "Any window length"},
 	{`journal search roadmap`, "Full-text search"},
 	{`journal search --tag work --tag bad`, "Narrow it to tagged entries"},
 }
@@ -23,6 +25,7 @@ var configRows = [][2]string{
 	{"AUTOSYNC=true", "Commit and push without asking"},
 	{"GIT_BRANCH=main", "Branch used for pull and push"},
 	{`JOURNAL_DIR="$HOME/journal"`, "Where the journal lives"},
+	{"SPRINT_START=2026-07-06", "First day of a sprint, for 'journal review'"},
 }
 
 // showHelp prints the top-level usage screen.

@@ -188,9 +188,14 @@ func rankTags(counts map[string]int, limit int) []TagCount {
 	return ranked
 }
 
-// dayGap returns the number of whole days between two midnight-truncated dates.
+// dayGap returns the number of calendar days between two midnight-truncated
+// dates. It compares them as calendar days rather than as instants, because a day
+// that daylight saving makes 23 hours long still counts as one.
 func dayGap(from, to time.Time) int {
-	return int(to.Sub(from).Hours() / 24)
+	const day = 24 * time.Hour
+	utcFrom := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC)
+	utcTo := time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, time.UTC)
+	return int(utcTo.Sub(utcFrom) / day)
 }
 
 // longestStreak is the longest run of consecutive calendar days in a sorted list

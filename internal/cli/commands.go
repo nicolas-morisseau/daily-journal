@@ -1,6 +1,11 @@
 package cli
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+
+	"daily-journal/internal/journal"
+)
 
 // openCommand is the default: open one entry in the editor.
 type openCommand struct{}
@@ -106,6 +111,37 @@ func (calendarCommand) Run(a *App, _ FlagValues, operands []string) error {
 		month = operands[0]
 	}
 	return a.calendar(month)
+}
+
+// reviewCommand shows the good/bad/mad notes of a period side by side.
+type reviewCommand struct{}
+
+func (reviewCommand) Name() string  { return "review" }
+func (reviewCommand) Usage() string { return "review [--weeks N] [--from DATE] [--to DATE]" }
+func (reviewCommand) Summary() string {
+	return "Sprint review: #good, #bad and #mad notes side by side"
+}
+
+func (reviewCommand) Flags() []Flag {
+	return []Flag{
+		{
+			Long: "weeks", Short: "w", Arg: "N", Default: strconv.Itoa(journal.DefaultReviewWeeks),
+			Help: "Length of the rolling window, in weeks",
+		},
+		{Long: "from", Arg: "DATE", Help: "First day covered, instead of the rolling window"},
+		{Long: "to", Arg: "DATE", Help: "Last day covered (default: today)"},
+	}
+}
+
+func (reviewCommand) Run(a *App, flags FlagValues, operands []string) error {
+	if err := noOperands("review", operands); err != nil {
+		return err
+	}
+	return a.review(reviewWindow{
+		Weeks: flags.String("weeks"),
+		From:  flags.String("from"),
+		To:    flags.String("to"),
+	})
 }
 
 // versionCommand reports the build, which is what a bug report needs.

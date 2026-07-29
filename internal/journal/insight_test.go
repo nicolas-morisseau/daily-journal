@@ -156,6 +156,63 @@ func TestEntryContent(t *testing.T) {
 	}
 }
 
+// TestDayGapCountsCalendarDays covers the daylight-saving trap: a 23-hour day is
+// still a day, and counting hours used to lose it — breaking both streaks and the
+// sprint boundaries that are counted in days.
+func TestDayGapCountsCalendarDays(t *testing.T) {
+	paris, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		t.Skipf("no timezone database: %v", err)
+	}
+	day := func(y int, m time.Month, d int) time.Time {
+		return time.Date(y, m, d, 0, 0, 0, 0, paris)
+	}
+
+	cases := []struct {
+		name     string
+		from, to time.Time
+		want     int
+	}{
+		// Paris springs forward on Sunday 2026-03-29 and falls back on 2026-10-25.
+		{"across the short day", day(2026, time.March, 29), day(2026, time.March, 30), 1},
+		{"fortnight across it", day(2026, time.March, 23), day(2026, time.April, 6), 14},
+		{"across the long day", day(2026, time.October, 25), day(2026, time.October, 26), 1},
+		{"fortnight across that", day(2026, time.October, 19), day(2026, time.November, 2), 14},
+		{"same day", day(2026, time.July, 28), day(2026, time.July, 28), 0},
+		{"backwards", day(2026, time.April, 6), day(2026, time.March, 23), -14},
+	}
+	for _, c := range cases {
+		if got := dayGap(c.from, c.to); got != c.want {
+			t.Errorf("%s: dayGap = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// TestInsightStreakAcrossDaylightSaving is the same trap seen from the feature
+// that has always depended on it.
+func TestInsightStreakAcrossDaylightSaving(t *testing.T) {
+	paris, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		t.Skipf("no timezone database: %v", err)
+	}
+	// The clocks go forward on the 29th, so the 29th is 23 hours long.
+	now := time.Date(2026, 3, 30, 14, 0, 0, 0, paris)
+	dir := t.TempDir()
+	j := New(dir, func() time.Time { return now })
+	if err := j.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	for _, slug := range []string{"2026-03-28", "2026-03-29", "2026-03-30"} {
+		write(t, j, slug, "# "+slug+"\n\nwrote something\n")
+	}
+
+	in := j.Insight(j.Today(), InsightOptions{})
+	if in.CurrentStreak != 3 || in.LongestStreak != 3 {
+		t.Errorf("streaks = %d current, %d longest, want 3 and 3 across the clock change",
+			in.CurrentStreak, in.LongestStreak)
+	}
+}
+
 func keysOf(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

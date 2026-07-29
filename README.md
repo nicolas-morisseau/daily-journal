@@ -60,6 +60,9 @@ sync — because the journal *is* a git repository.
   tags. Press `e` on any day to edit it in place.
 - **Search** — case-insensitive full-text search with context lines, optionally
   narrowed to entries carrying `#tags`.
+- **A sprint review** — `journal review` lines the notes you tagged `#good`,
+  `#bad` and `#mad` over the last two weeks up in three columns, dated, ready to
+  walk through in a retro.
 - **Natural dates** — `journal open yesterday`, `"last friday"`, `"3 days ago"`,
   `2025-01-15`. Same grammar on macOS and Linux.
 - **Git built in** — pulls before you write, offers to commit and push after
@@ -136,6 +139,7 @@ Usage: journal [COMMAND] [OPTIONS]
 | `journal search [--tag TAG]... QUERY...` | Search the text, optionally within tags |
 | `journal week` | Open every entry from the current week at once |
 | `journal calendar [YYYY-MM]` | Full-screen month view: read and edit entries |
+| `journal review [--weeks N] [--from DATE] [--to DATE]` | Sprint review: `#good`, `#bad` and `#mad` side by side |
 | `journal version` | Print the version of this build |
 | `journal help [COMMAND]` | Usage for the tool or for one command |
 
@@ -179,12 +183,94 @@ entry — creating it if needed — and picks the view back up when you quit.
 | --- | --- | --- | --- |
 | `←` `→` | day | `j` `k` `^d` `^u` `g` `G` | scroll the entry |
 | `↑` `↓` | week | `e` / `enter` | edit the day |
-| `n` `p` | month | `t` | jump to today |
-| | | `q` | quit |
+| `n` `p` | month | `r` | sprint review of that day |
+| `t` | today | `q` | quit |
+
+`r` switches to the [sprint review](#the-sprint-review) of the period the selected
+day belongs to, and `q` there comes straight back to the month you left — same
+day, reloaded in case you edited an entry on the way.
 
 Side panels drop out on narrow terminals so the markdown always keeps room.
 Piped, `journal calendar` prints a plain month grid instead, so it stays usable
 in scripts.
+
+### The sprint review
+
+`journal review` pulls the notes you tagged `#good`, `#bad` and `#mad` out of the
+last two weeks and puts them side by side, one column per mood, each note
+carrying the day it was written:
+
+```
+  SPRINT REVIEW  15 Jul → 28 Jul 2026              14 days  ·  9 entries  ·  6 notes
+
+  ╭──────────────────────────────╮ ╭──────────────────────────────╮ ╭──────────────────────────────╮
+  │ ✓ GOOD                   1/3 │ │ ▲ BAD                      2 │ │ ✖ MAD                      1 │
+  │ ──────────────────────────── │ │ ──────────────────────────── │ │ ──────────────────────────── │
+  │ ▌ Mon 20 Jul  09:12          │ │ │ Mon 20 Jul  11:49          │ │ │ Thu 23 Jul  16:40          │
+  │ ▌ Finally understood why the │ │ │ Lost in the MRs. sbt 2     │ │ │ The staging database was   │
+  │ ▌ deploy was flaky: the      │ │ │ broke the double push, and │ │ │ wiped again by a job       │
+  │ ▌ cache warmup raced the     │ │ │ fixing it took the whole   │ │ │ nobody owns.               │
+  │ ▌ health check.              │ │ │ morning.                   │ │                              │
+  │                              │ │                              │ │                              │
+  │ │ Thu 23 Jul  18:16          │ │ │ Mon 27 Jul  11:35          │ │                              │
+  │ │ All hands. Good to have    │ │ │ Found a public repo with   │ │                              │
+  │ │ the swarms' objectives in  │ │ │ the internal roadmap in    │ │                              │
+  │ │ one place.                 │ │ │ it. Back to internal.      │ │                              │
+  ╰──────────────────────────────╯ ╰──────────────────────────────╯ ╰──────────────────────────────╯
+
+  ← → mood  ·  ↑ ↓ note  ·  e edit  ·  p n period  ·  t now  ·  q quit
+```
+
+A note is one timestamped line — what `journal "a thought"` writes — with
+everything that follows it until the next one, so a note edited into a paragraph
+stays one card. A tagged line written by hand, bullet or not, counts too. The
+mood tag labels the column, so the cards drop it; your other tags stay.
+
+| Key | | Key | |
+| --- | --- | --- | --- |
+| `←` `→` | mood column | `e` / `enter` | edit the note's day |
+| `↑` `↓` `^d` `^u` `g` `G` | note | `p` `n` | previous / next period |
+| | | `t` | back to the starting period |
+| | | `q` | quit |
+
+Paging moves by the window's own length: on the default fortnight, `p` twice
+lands a month back. The period itself is yours to choose:
+
+```bash
+journal review                          # the last two weeks
+journal review --weeks 3                # a longer sprint
+journal review --to "last friday"       # the window ending then
+journal review --from 2026-07-01        # everything since, whatever its length
+```
+
+#### Real sprints, not the last fourteen days
+
+By default the window rolls: open it on a Tuesday and it runs Tuesday to Tuesday.
+If your sprints have actual boundaries, name the first day of any one of them
+once and the window snaps to them instead:
+
+```bash
+# In ~/.config/daily-journal/config
+SPRINT_START=2026-07-06
+```
+
+From that Monday, sprints run 6–19 July, 20 July–2 August, and so on. Now
+`journal review` shows the sprint you are *in*, whichever day you open it — the
+same bounds on the Monday and on the Friday of week two — and `p` walks back a
+whole sprint at a time. The anchor is just a reference point: an earlier date
+works, and so does a future one, since the boundaries are counted in both
+directions.
+
+`--weeks` is the sprint length, so it also decides where the boundaries fall.
+`--from` still means exactly what it says and ignores the anchor. With no
+`SPRINT_START`, nothing changes: the window keeps rolling with today.
+
+Below three columns' worth of width the view shows one mood at a time, and `←`
+`→` walk between them. Piped, `journal review` prints the same columns as plain
+text — enough to paste into a retro doc.
+
+`journal calendar` reaches the same view: press `r` on any day for the review of
+the period it belongs to, and `q` to go back to the month.
 
 ## Configuration
 
@@ -203,9 +289,12 @@ GIT_BRANCH=main
 
 # Editor to open entries with. Default: $EDITOR, then code > vim > nano
 EDITOR="hx --vsplit"
+
+# First day of a sprint, for `journal review`. Default: unset, rolling window
+SPRINT_START=2026-07-06
 ```
 
-Those four keys are all there is.
+Those five keys are all there is.
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -213,6 +302,7 @@ Those four keys are all there is.
 | `AUTOSYNC` | off | Only the exact string `true` enables it — `1` and `yes` do not. |
 | `GIT_BRANCH` | `main` | Used by `git pull` and `git push`. |
 | `EDITOR` | `$EDITOR` | Quote it to pass arguments: `EDITOR="code --wait"`. |
+| `SPRINT_START` | unset | One `YYYY-MM-DD` date. Only `journal review` reads it, and only it fails on a bad value. |
 
 <details>
 <summary><strong>File format details</strong></summary>

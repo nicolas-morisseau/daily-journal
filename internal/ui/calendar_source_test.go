@@ -17,6 +17,11 @@ type fakeSource struct {
 	editCalls int
 	// lastEdited is the day of the most recent EditCommand call.
 	lastEdited time.Time
+	// periodErr is returned by ReviewPeriod instead of a period, when set. It
+	// stands in for an unreadable SPRINT_START.
+	periodErr error
+	// anchor is the sprint start ReviewPeriod hands out, zero for a rolling window.
+	anchor time.Time
 }
 
 func newFakeSource(j *journal.Journal) *fakeSource { return &fakeSource{journal: j} }
@@ -30,6 +35,17 @@ func (s *fakeSource) EntryContent(day time.Time) (string, bool) {
 
 func (s *fakeSource) Insight(day time.Time, opts journal.InsightOptions) journal.Insight {
 	return s.journal.Insight(day, opts)
+}
+
+func (s *fakeSource) Review(opts journal.ReviewOptions) (journal.Review, error) {
+	return s.journal.Review(opts)
+}
+
+func (s *fakeSource) ReviewPeriod(day time.Time) (journal.ReviewOptions, error) {
+	if s.periodErr != nil {
+		return journal.ReviewOptions{}, s.periodErr
+	}
+	return journal.ReviewOptions{To: day, Anchor: s.anchor}, nil
 }
 
 func (s *fakeSource) EditCommand(day time.Time) (*exec.Cmd, error) {

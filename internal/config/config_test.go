@@ -119,6 +119,33 @@ EDITOR=hx
 	}
 }
 
+// TestLoadSprintStart: the value is carried through unparsed, so a typo is the
+// review command's problem rather than every command's.
+func TestLoadSprintStart(t *testing.T) {
+	env := testEnv(t, nil)
+	if cfg, err := Load(env); err != nil {
+		t.Fatal(err)
+	} else if cfg.SprintStart != "" {
+		t.Errorf("SprintStart = %q, want empty without a config file", cfg.SprintStart)
+	}
+
+	writeConfig(t, env, "SPRINT_START=2026-07-06   # sprints start on this Monday\n")
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SprintStart != "2026-07-06" {
+		t.Errorf("SprintStart = %q, want 2026-07-06", cfg.SprintStart)
+	}
+
+	writeConfig(t, env, "SPRINT_START=whenever\n")
+	if cfg, err := Load(env); err != nil {
+		t.Errorf("a malformed date must not stop the config loading: %v", err)
+	} else if cfg.SprintStart != "whenever" {
+		t.Errorf("SprintStart = %q, want it passed through as written", cfg.SprintStart)
+	}
+}
+
 // TestLoadIgnoresRetiredKeys covers config files written for earlier versions:
 // keys that no longer exist must be skipped, never rejected.
 func TestLoadIgnoresRetiredKeys(t *testing.T) {

@@ -576,9 +576,190 @@ func TestCalendarMonthArgument(t *testing.T) {
 	assertUsageError(t, h.run("calendar", "2026-02", "extra"), "calendar", "2026-02", "extra")
 }
 
+// --- review ------------------------------------------------------------------
+
+// reviewHarness fills a journal with tagged notes spread over three weeks, so
+// the default fortnight ends up covering some of them and not others.
+func reviewHarness(t *testing.T) *harness {
+	t.Helper()
+	h := newHarness(t, "")
+	// Today is 2026-07-28, so the default window opens on 2026-07-15.
+	writeEntry(t, h, "2026-07-10", "# 2026-07-10\n\n**09:00** - three weeks ago [#good]\n")
+	writeEntry(t, h, "2026-07-20", "# 2026-07-20\n\n**09:00** - shipped the migration [#good]\n\n**11:00** - lost in the MRs [#bad]\n")
+	writeEntry(t, h, "2026-07-27", "# 2026-07-27\n\n**16:00** - the staging database, again [#mad]\n")
+	writeEntry(t, h, "2026-07-28", "# 2026-07-28\n\n**10:00** - nothing tagged in this one\n")
+	return h
+}
+
+func TestReviewDefaultsToTheLastTwoWeeks(t *testing.T) {
+	h := reviewHarness(t)
+	if err := h.run("review"); err != nil {
+		t.Fatal(err)
+	}
+
+	out := h.out()
+	for _, want := range []string{
+		"Sprint review", "15 Jul → 28 Jul 2026", "14 days", "3 entries", "3 notes",
+		"GOOD", "BAD", "MAD",
+		// The cards wrap, so match on words that stay on one line.
+		"shipped the migration", "lost in the MRs", "the staging database",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("review output is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "three weeks ago") {
+		t.Errorf("the note from the 10th is outside the fortnight:\n%s", out)
+	}
+	// The mood tags label the columns, so the cards drop them.
+	if strings.Contains(out, "[#good]") {
+		t.Errorf("cards should not repeat their mood tag:\n%s", out)
+	}
+}
+
+func TestReviewWindowOptions(t *testing.T) {
+	h := reviewHarness(t)
+
+	// A shorter window drops the note from the 20th.
+	if err := h.run("review", "--weeks", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if out := h.out(); strings.Contains(out, "shipped the migration") {
+		t.Errorf("--weeks 1 should start on the 22nd:\n%s", out)
+	}
+
+	// --weeks counts back from --to.
+	if err := h.run("review", "--weeks", "1", "--to", "2026-07-20"); err != nil {
+		t.Fatal(err)
+	}
+	if out := h.out(); !strings.Contains(out, "14 Jul → 20 Jul 2026") {
+		t.Errorf("--to should move the window:\n%s", out)
+	}
+
+	// An explicit --from wins over the rolling window, and dates are the same
+	// expressions every other command takes.
+	if err := h.run("review", "--from", "3 weeks ago"); err != nil {
+		t.Fatal(err)
+	}
+	out := h.out()
+	if !strings.Contains(out, "7 Jul → 28 Jul 2026") {
+		t.Errorf("--from should open the window on the 7th:\n%s", out)
+	}
+	if !strings.Contains(out, "three weeks ago") {
+		t.Errorf("the wider window should reach the note from the 10th:\n%s", out)
+	}
+}
+
+func TestReviewRejectsNonsense(t *testing.T) {
+	h := reviewHarness(t)
+	for _, args := range [][]string{
+		{"review", "--weeks", "0"},
+		{"review", "--weeks", "-3"},
+		{"review", "--weeks", "two"},
+		{"review", "--from", "not a date"},
+		{"review", "--to", "nope"},
+		{"review", "last", "sprint"},
+	} {
+		assertUsageError(t, h.run(args...), args...)
+	}
+}
+
+// TestReviewSprintStartFixesTheWindow is the behaviour SPRINT_START buys: the
+// window stops depending on the day the review is opened on.
+func TestReviewSprintStartFixesTheWindow(t *testing.T) {
+	// Sprints start on Monday 2026-07-06, so today (Tuesday the 28th) is in the
+	// sprint running 20 July to 2 August.
+	h := newHarness(t, "", "SPRINT_START=2026-07-06")
+	writeEntry(t, h, "2026-07-19", "# 2026-07-19\n\n**09:00** - last day of the sprint before [#good]\n")
+	writeEntry(t, h, "2026-07-20", "# 2026-07-20\n\n**09:00** - first day of this sprint [#good]\n")
+
+	if err := h.run("review"); err != nil {
+		t.Fatal(err)
+	}
+	out := h.out()
+	if !strings.Contains(out, "20 Jul → 2 Aug 2026") {
+		t.Errorf("the window should be the sprint, not the last two weeks:\n%s", out)
+	}
+	// The cards wrap, so match on words that stay on one line.
+	if !strings.Contains(out, "first day of this") {
+		t.Errorf("the note from the 20th belongs to this sprint:\n%s", out)
+	}
+	if strings.Contains(out, "last day of the sprint before") {
+		t.Errorf("the note from the 19th belongs to the sprint before:\n%s", out)
+	}
+
+	// A day inside the same sprint gives the very same window.
+	if err := h.run("review", "--to", "2026-07-22"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.out(), "20 Jul → 2 Aug 2026") {
+		t.Errorf("--to inside the sprint should not move it:\n%s", h.out())
+	}
+
+	// --from still means what it says.
+	if err := h.run("review", "--from", "2026-07-19", "--to", "2026-07-19"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.out(), "19 Jul → 19 Jul 2026") {
+		t.Errorf("an explicit window should win over the sprint:\n%s", h.out())
+	}
+}
+
+// TestReviewWithoutSprintStartRolls: no anchor, no change of behaviour.
+func TestReviewWithoutSprintStartRolls(t *testing.T) {
+	h := reviewHarness(t)
+	if err := h.run("review"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.out(), "15 Jul → 28 Jul 2026") {
+		t.Errorf("without SPRINT_START the window rolls with today:\n%s", h.out())
+	}
+}
+
+func TestReviewRejectsAMalformedSprintStart(t *testing.T) {
+	// Quoted, because a bare config word ends at the first space.
+	h := newHarness(t, "", `SPRINT_START="first monday of july"`)
+	writeEntry(t, h, "2026-07-28", "# 2026-07-28\n\n**09:00** - a note [#good]\n")
+
+	err := h.run("review")
+	if err == nil {
+		t.Fatal("a malformed SPRINT_START should be reported")
+	}
+	for _, want := range []string{"SPRINT_START", "first monday of july", "YYYY-MM-DD"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q, got: %v", want, err)
+		}
+	}
+	// Everything else keeps working: one bad key does not break the tool.
+	if err := h.run("calendar"); err != nil {
+		t.Errorf("calendar should not care about SPRINT_START: %v", err)
+	}
+	if err := h.run("add", "still writing"); err != nil {
+		t.Errorf("capture should not care about SPRINT_START: %v", err)
+	}
+}
+
+func TestReviewWithNothingTagged(t *testing.T) {
+	h := newHarness(t, "")
+	writeEntry(t, h, "2026-07-28", "# 2026-07-28\n\n**10:00** - a day like any other\n")
+
+	if err := h.run("review"); err != nil {
+		t.Fatal(err)
+	}
+	out := h.out()
+	if !strings.Contains(out, "0 notes") {
+		t.Errorf("an untagged fortnight should report no notes:\n%s", out)
+	}
+	for _, want := range []string{"No #good note", "No #bad note", "No #mad note"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCommandsNeedingEntriesGiveAHint(t *testing.T) {
 	h := newHarness(t, "")
-	for _, args := range [][]string{{"search", "x"}} {
+	for _, args := range [][]string{{"search", "x"}, {"review"}} {
 		err := h.run(args...)
 		if err == nil {
 			t.Errorf("%v should fail without an entries directory", args)

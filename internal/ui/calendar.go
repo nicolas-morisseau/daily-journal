@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -15,8 +14,10 @@ import (
 )
 
 // CalendarSource supplies the calendar view with everything it shows, so the
-// view itself touches neither the filesystem nor the editor.
+// view itself touches neither the filesystem nor the editor. It covers the sprint
+// review the calendar can switch to as well.
 type CalendarSource interface {
+	ReviewSource
 	// Calendar lays out one month.
 	Calendar(m journal.Month) journal.Calendar
 	// Today is the current date at midnight.
@@ -25,9 +26,8 @@ type CalendarSource interface {
 	EntryContent(day time.Time) (string, bool)
 	// Insight summarises the journal around a day, for the side panel.
 	Insight(day time.Time, opts journal.InsightOptions) journal.Insight
-	// EditCommand prepares the editor for a day, creating the entry if needed.
-	// The view runs it in the foreground and reloads afterwards.
-	EditCommand(day time.Time) (*exec.Cmd, error)
+	// ReviewPeriod is the period to review around a day.
+	ReviewPeriod(day time.Time) (journal.ReviewOptions, error)
 }
 
 // Panel widths, in content columns. The centre pane takes whatever is left.
@@ -57,6 +57,10 @@ type calendarModel struct {
 	hasEntry bool
 	// entryWords is the selected entry's word count.
 	entryWords int
+
+	// review is the sprint review shown over the calendar, nil while the calendar
+	// itself is on screen.
+	review *reviewModel
 
 	width, height int
 
@@ -191,10 +195,18 @@ func (m calendarModel) paneContentHeight() int {
 }
 
 func (m calendarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The calendar keeps its own layout up to date even while the review is on
+	// screen, so coming back from it never shows a stale month.
+	if size, ok := msg.(tea.WindowSizeMsg); ok {
+		m.width, m.height = size.Width, size.Height
+		m.loadEntry()
+	}
+	if m.review != nil {
+		return m.updateReview(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.loadEntry()
 		return m, nil
 
 	case editorFinishedMsg:
@@ -223,6 +235,9 @@ func (m calendarModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "e", "enter":
 		return m, m.editSelected()
+
+	case "r":
+		m.openReview()
 
 	// Moving through the calendar.
 	case "left", "h":
@@ -257,6 +272,37 @@ func (m calendarModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openReview switches to the sprint review of the period the selected day falls
+// in. Nothing is lost: leaving the review comes back to this month and day.
+func (m *calendarModel) openReview() {
+	opts, err := m.source.ReviewPeriod(m.selected)
+	if err != nil {
+		m.err = err
+		return
+	}
+	review := newReviewModel(m.theme, m.source, opts, m.width, m.height)
+	review.nested = true
+	m.review = &review
+}
+
+// updateReview drives the review while it is on screen and takes the calendar
+// back when it is left. Leaving it must not end the program, so the Quit command
+// it returns is dropped.
+func (m calendarModel) updateReview(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.review.Update(msg)
+	next, ok := updated.(reviewModel)
+	if !ok {
+		return m, cmd
+	}
+	if next.quit {
+		m.review = nil
+		m.reload()
+		return m, nil
+	}
+	*m.review = next
+	return m, cmd
+}
+
 // editSelected opens the selected day in the editor, in the foreground.
 func (m calendarModel) editSelected() tea.Cmd {
 	cmd, err := m.source.EditCommand(m.selected)
@@ -286,6 +332,9 @@ func (m *calendarModel) shiftMonth(delta int) {
 func (m calendarModel) View() string {
 	if m.quit {
 		return ""
+	}
+	if m.review != nil {
+		return m.review.View()
 	}
 
 	panes := make([]string, 0, 5)
@@ -352,6 +401,7 @@ var keyHints = [][2]string{
 	{"t", "today"},
 	{"j k", "scroll entry"},
 	{"e", "edit entry"},
+	{"r", "sprint review"},
 	{"q", "quit"},
 }
 
@@ -498,14 +548,18 @@ func centre(text string, width int) string {
 	return strings.Repeat(" ", pad) + text
 }
 
-// truncate shortens text to width columns.
+// truncate shortens text to width columns. A width of zero or less leaves room
+// for nothing, which is what a terminal yet to report its size asks for.
 func truncate(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
 	runes := []rune(text)
 	if len(runes) <= width {
 		return text
 	}
-	if width <= 1 {
-		return string(runes[:width])
+	if width == 1 {
+		return string(runes[:1])
 	}
 	return string(runes[:width-1]) + "…"
 }

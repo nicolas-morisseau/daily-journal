@@ -210,6 +210,110 @@ func TestCalendarScrollKeysDoNotMoveTheSelection(t *testing.T) {
 	}
 }
 
+// TestCalendarOpensAndLeavesTheReview covers the round trip: r switches to the
+// sprint review of the selected day, and leaving it comes back to the month.
+func TestCalendarOpensAndLeavesTheReview(t *testing.T) {
+	m, _, today := newCalendarFixture(t)
+
+	m = send(t, m, "r")
+	if m.review == nil {
+		t.Fatal("r should open the review")
+	}
+	view := m.View()
+	if !strings.Contains(view, "SPRINT REVIEW") {
+		t.Errorf("the review should be on screen:\n%s", view)
+	}
+	// The period ends on the selected day, and the footer says how to get back.
+	if got := m.review.review.To; !got.Equal(today) {
+		t.Errorf("period ends %s, want the selected day %s", got, today)
+	}
+	if !strings.Contains(view, "back to the calendar") {
+		t.Errorf("a nested review should not offer to quit:\n%s", view)
+	}
+
+	// Keys go to the review while it is up, not to the calendar underneath.
+	m = send(t, m, "right")
+	if m.review == nil {
+		t.Fatal("the review should still be up")
+	}
+	if m.review.focus != 1 {
+		t.Errorf("right should move the review's mood, focus = %d", m.review.focus)
+	}
+	if !m.selected.Equal(today) {
+		t.Errorf("the calendar's day moved to %s while the review was up", m.selected)
+	}
+
+	m = send(t, m, "q")
+	if m.review != nil {
+		t.Fatal("q should leave the review")
+	}
+	if m.quit {
+		t.Error("leaving the review must not quit the program")
+	}
+	if !strings.Contains(m.View(), "July 2026") {
+		t.Errorf("the calendar should be back:\n%s", m.View())
+	}
+	// And now q means what it says.
+	if m = send(t, m, "q"); !m.quit {
+		t.Error("q on the calendar should quit")
+	}
+}
+
+func TestCalendarReviewFollowsTheSelectedDay(t *testing.T) {
+	m, source, _ := newCalendarFixture(t)
+	source.anchor = time.Date(2026, 7, 6, 0, 0, 0, 0, time.UTC)
+
+	// Move to 30 July, still inside the sprint that opens on 20 July.
+	m = send(t, m, "right", "right", "r")
+	if m.review == nil {
+		t.Fatal("r should open the review")
+	}
+	if got := m.review.review.Period(); got != "20 Jul → 2 Aug 2026" {
+		t.Errorf("Period = %q, want the sprint the selected day falls in", got)
+	}
+}
+
+// TestCalendarReportsABrokenReviewPeriod: a misconfigured SPRINT_START must not
+// take the calendar down.
+func TestCalendarReportsABrokenReviewPeriod(t *testing.T) {
+	m, source, _ := newCalendarFixture(t)
+	source.periodErr = errTest
+
+	m = send(t, m, "r")
+	if m.review != nil {
+		t.Error("the review should not open when the period cannot be resolved")
+	}
+	if !strings.Contains(m.View(), "boom") {
+		t.Errorf("the failure should be shown:\n%s", m.View())
+	}
+}
+
+// TestCalendarReviewEditReloadsBoth: editing from the nested review must refresh
+// the calendar too, since the entry it just changed is the one on screen.
+func TestCalendarReviewEditReloadsBoth(t *testing.T) {
+	m, source, _ := newCalendarFixture(t)
+	// Tag today's entry so the review has a note to sit on.
+	appendTo(t, source.journal.EntriesDir()+"/2026-07-28.md", "\n**09:00** - shipped it [#good]\n")
+
+	m = send(t, m, "r")
+	if m.review == nil || len(m.review.columns[0].items) != 1 {
+		t.Fatalf("the review should hold the tagged note: %+v", m.review)
+	}
+
+	before := m.entryWords
+	appendTo(t, source.journal.EntriesDir()+"/2026-07-28.md", "\nmore words from the editor\n")
+	model, _ := m.Update(editorFinishedMsg{})
+	after := model.(calendarModel)
+
+	if !strings.Contains(after.View(), "Saved") {
+		t.Error("the review should report the save")
+	}
+	after = send(t, after, "q")
+	if after.entryWords <= before {
+		t.Errorf("the calendar should have reloaded: %d words, was %d", after.entryWords, before)
+	}
+}
+
 func TestCalendarQuit(t *testing.T) {
 	m, _, _ := newCalendarFixture(t)
 	m = send(t, m, "q")
