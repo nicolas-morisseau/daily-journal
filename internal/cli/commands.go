@@ -113,6 +113,31 @@ func (calendarCommand) Run(a *App, _ FlagValues, operands []string) error {
 	return a.calendar(month)
 }
 
+// dailyCommand shows the last day at a glance, for the stand-up.
+type dailyCommand struct{}
+
+func (dailyCommand) Name() string  { return "daily" }
+func (dailyCommand) Usage() string { return "daily [--days N]" }
+func (dailyCommand) Summary() string {
+	return "Stand-up recap: the last day's notes and git commits"
+}
+
+func (dailyCommand) Flags() []Flag {
+	return []Flag{
+		{
+			Long: "days", Short: "d", Arg: "N", Default: strconv.Itoa(journal.DefaultDailyDays),
+			Help: "How many days back to cover, as git-standup counts them",
+		},
+	}
+}
+
+func (dailyCommand) Run(a *App, flags FlagValues, operands []string) error {
+	if err := noOperands("daily", operands); err != nil {
+		return err
+	}
+	return a.daily(flags.String("days"))
+}
+
 // reviewCommand shows the good/bad/mad notes of a period side by side.
 type reviewCommand struct{}
 

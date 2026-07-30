@@ -19,6 +19,7 @@ const (
 	KeyAutosync    = "AUTOSYNC"
 	KeyEditor      = "EDITOR"
 	KeySprintStart = "SPRINT_START"
+	KeyProjectsDir = "PROJECTS_DIR"
 )
 
 // AppName names the config directory under $XDG_CONFIG_HOME.
@@ -51,6 +52,11 @@ type Config struct {
 	// window rolling with today. It is kept unparsed so that a typo fails the one
 	// command that reads it rather than every command.
 	SprintStart string
+
+	// ProjectsDir holds the git repositories `journal daily` reads the day's
+	// commits from, by running git-standup there. Empty leaves the stand-up
+	// without its git side, which is not an error: the journal half still works.
+	ProjectsDir string
 
 	// Path is the config file location, whether or not it exists.
 	Path string
@@ -122,6 +128,7 @@ func Load(env Env) (*Config, error) {
 		GitBranch:    DefaultGitBranch,
 		Editor:       env.get(KeyEditor),
 		JournalDir:   env.get(KeyJournalDir),
+		ProjectsDir:  env.get(KeyProjectsDir),
 		MigratedFrom: "",
 		Autosync:     false,
 	}
@@ -142,6 +149,7 @@ func Load(env Env) (*Config, error) {
 		cfg.JournalDir = defaultJournalDir(env)
 	}
 	cfg.JournalDir = expandHome(cfg.JournalDir, env.Home)
+	cfg.ProjectsDir = expandHome(cfg.ProjectsDir, env.Home)
 	return cfg, nil
 }
 
@@ -163,6 +171,9 @@ func (c *Config) apply(vars *shellVars) {
 	}
 	if v, ok := vars.get(KeySprintStart); ok {
 		c.SprintStart = v
+	}
+	if v, ok := vars.get(KeyProjectsDir); ok {
+		c.ProjectsDir = v
 	}
 }
 

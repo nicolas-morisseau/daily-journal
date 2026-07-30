@@ -58,6 +58,9 @@ sync — because the journal *is* a git repository.
 - **A calendar to read back** — full-screen month view with the selected day's
   markdown rendered next to it, plus streaks, word counts and your most used
   tags. Press `e` on any day to edit it in place.
+- **A stand-up view** — `journal daily` puts yesterday and today's notes next to
+  the commits you pushed in the same window, and takes a new note straight from
+  the keyboard. What you need to talk for two minutes, on one screen.
 - **Search** — case-insensitive full-text search with context lines, optionally
   narrowed to entries carrying `#tags`.
 - **A sprint review** — `journal review` lines the notes you tagged `#good`,
@@ -139,6 +142,7 @@ Usage: journal [COMMAND] [OPTIONS]
 | `journal search [--tag TAG]... QUERY...` | Search the text, optionally within tags |
 | `journal week` | Open every entry from the current week at once |
 | `journal calendar [YYYY-MM]` | Full-screen month view: read and edit entries |
+| `journal daily [--days N]` | Stand-up view: the last day's notes and git commits |
 | `journal review [--weeks N] [--from DATE] [--to DATE]` | Sprint review: `#good`, `#bad` and `#mad` side by side |
 | `journal version` | Print the version of this build |
 | `journal help [COMMAND]` | Usage for the tool or for one command |
@@ -193,6 +197,95 @@ day, reloaded in case you edited an entry on the way.
 Side panels drop out on narrow terminals so the markdown always keeps room.
 Piped, `journal calendar` prints a plain month grid instead, so it stays usable
 in scripts.
+
+### The daily stand-up
+
+`journal daily` is the screen to open two minutes before the stand-up: what you
+wrote yesterday and today on the left, what you committed over the same window on
+the right, and a box at the bottom to add a line without leaving.
+
+```
+  DAILY  Tuesday 28 July 2026                                 3 notes  ·  39 words  ·  3 commits
+  Since yesterday  ·  Mon 27 Jul → Tue 28 Jul
+
+  ╭────────────────────────────────────────────────╮ ╭────────────────────────────────────────────╮
+  │ JOURNAL                                3 notes │ │ GIT                   3 commits in 2 repos │
+  │ ────────────────────────────────────────────── │ │ ────────────────────────────────────────── │
+  │ Today · Tuesday 28 July                        │ │ stats-service                            2 │
+  │ │ 09:12  Taking the logback bump through the   │ │ │ 676ee18 chore(log): bump the… 3 hours ago │
+  │ │        last four services.                   │ │ │ 468a5d8 fix: the classpath    5 hours ago │
+  │                                                │ │                                            │
+  │ │ 11:40  The classpath error was a missing     │ │ mailer-service                           1 │
+  │ │        protobuf schema, not the Scala 3      │ │ │ 9329a3a feat: migrate the reg…  yesterday │
+  │ │        move.                                 │ │                                            │
+  │                                                │ │                                            │
+  │ Yesterday · Monday 27 July                     │ │                                            │
+  │ │ 17:05  Shipped the GitHub Packages switch    │ │                                            │
+  │ │        on stats-service.                     │ │                                            │
+  ╰────────────────────────────────────────────────╯ ╰────────────────────────────────────────────╯
+
+  ╭────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ › Add a line to today's entry…                                                                 │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
+  i type a note  ·  e edit today  ·  tab pane  ·  j k scroll  ·  r refresh  ·  q quit
+```
+
+The journal side shows every note of the window, timestamped or not, days without
+an entry included — a stand-up that hid them would be lying about the day. Tags
+stay as written. Times sit in a column of their own so the day is scanned down the
+left edge rather than read through; on a pane too narrow for that column, they take
+the line above their note instead.
+
+| Key | | Key | |
+| --- | --- | --- | --- |
+| `i` / `a` | type a note | `e` / `enter` | open today's entry in `$EDITOR` |
+| `enter` | add it to today | `tab` | switch pane |
+| `esc` | stop typing | `j` `k` `^d` `^u` `g` `G` | scroll the focused pane |
+| `ctrl+c` | quit while typing | `r` | re-read both halves |
+| | | `q` | quit |
+
+Typing is a mode, so the shortcuts stay short: `i` opens the box, `enter` writes
+the line into today's entry exactly as `journal "a thought"` would and leaves the
+box open for the next one, `esc` gives the keyboard back. What you typed survives
+a failure, and the new note shows up in the pane straight away.
+
+The window is a day back by default, the same as `git standup -d 1`. On a Monday,
+widen it:
+
+```bash
+journal daily --days 3     # Friday, the weekend and today
+```
+
+#### The git half
+
+The commits come from [git-standup](https://github.com/kamranahmedse/git-standup),
+which walks a directory of repositories and lists what you committed in each. Two
+things to have:
+
+```bash
+brew install git-standup
+
+# In ~/.config/daily-journal/config
+PROJECTS_DIR="$HOME/projects"
+```
+
+`journal daily` then runs `git standup -s -d <days>` there and groups the result
+by repository. It reads the current branch of every repository under
+`PROJECTS_DIR`, filtered to your own commits — that is git-standup's own default,
+not something this tool decides.
+
+Neither is required. Without the helper, or without `PROJECTS_DIR`, the git pane
+says which one is missing and the journal half works exactly as before. The walk
+takes a few seconds over a hundred repositories, so it runs in the background: the
+pane fills in when it is done, and the rest of the view never waits for it.
+
+Below two columns' worth of width the view shows one pane at a time, and `tab`
+walks between them. Piped, `journal daily` prints both halves as plain text, ready
+to paste into wherever the stand-up gets written down:
+
+```bash
+journal daily | pbcopy
+```
 
 ### The sprint review
 
@@ -292,9 +385,12 @@ EDITOR="hx --vsplit"
 
 # First day of a sprint, for `journal review`. Default: unset, rolling window
 SPRINT_START=2026-07-06
+
+# Repositories `journal daily` reads git activity from. Default: unset, no git half
+PROJECTS_DIR="$HOME/projects"
 ```
 
-Those five keys are all there is.
+Those six keys are all there is.
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -303,6 +399,7 @@ Those five keys are all there is.
 | `GIT_BRANCH` | `main` | Used by `git pull` and `git push`. |
 | `EDITOR` | `$EDITOR` | Quote it to pass arguments: `EDITOR="code --wait"`. |
 | `SPRINT_START` | unset | One `YYYY-MM-DD` date. Only `journal review` reads it, and only it fails on a bad value. |
+| `PROJECTS_DIR` | unset | Directory holding your repositories. Only `journal daily` reads it, and it says so in place rather than failing. |
 
 <details>
 <summary><strong>File format details</strong></summary>
@@ -322,7 +419,7 @@ would expect from the days when it was `source`d:
 - **unknown keys are ignored**, so a config written for an older version keeps
   working (`MULTI_JOURNAL`, `ACTIVE_JOURNAL`, `DISABLE_PROMPTS` are skipped).
 
-`JOURNAL_DIR` and `EDITOR` are also read from the environment, and
+`JOURNAL_DIR`, `PROJECTS_DIR` and `EDITOR` are also read from the environment, and
 `XDG_CONFIG_HOME` moves the config directory. The config file wins over the
 environment.
 
@@ -398,6 +495,7 @@ go vet ./... && test -z "$(gofmt -l .)"   # the pre-commit gate
 
 # render the TUI views without a terminal, to eyeball a layout change
 CLICOLOR_FORCE=1 go test -run TestRenderPreview -v ./internal/ui
+CLICOLOR_FORCE=1 go test -run 'TestRender(Review|Daily)Preview' -v ./internal/ui
 ```
 
 ```
@@ -406,8 +504,9 @@ CLICOLOR_FORCE=1 go test -run TestRenderPreview -v ./internal/ui
 cmd/journal/        entry point, build info, exit statuses
 internal/config/    the shell-style config file, XDG paths, migration
 internal/dateparse/ "last friday", "3 days ago", ISO dates
-internal/journal/   the domain: entries, search, calendar, insights
+internal/journal/   the domain: entries, search, calendar, insights, daily recap
 internal/gitrepo/   the git operations the tool needs
+internal/standup/   the optional git-standup helper, parsed into a report
 internal/editor/    locating and launching $EDITOR
 internal/ui/        theme, styled output, Bubble Tea views
 internal/cli/       flag parser, command table, dispatch
@@ -438,6 +537,11 @@ The interactive views are built with
 [Bubble Tea](https://github.com/charmbracelet/bubbletea) and
 [Lip Gloss](https://github.com/charmbracelet/lipgloss); the calendar layout is
 inspired by [tock](https://github.com/kriuchkov/tock)'s calendar view.
+
+The git half of `journal daily` is
+[git-standup](https://github.com/kamranahmedse/git-standup) by
+[kamranahmedse](https://github.com/kamranahmedse), read as it prints. It stays an
+optional dependency: everything else works without it.
 
 ## License
 

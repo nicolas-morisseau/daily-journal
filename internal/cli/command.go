@@ -36,6 +36,7 @@ func Commands() []Command {
 		searchCommand{},
 		weekCommand{},
 		calendarCommand{},
+		dailyCommand{},
 		reviewCommand{},
 		versionCommand{},
 		helpCommand{},

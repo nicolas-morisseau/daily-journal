@@ -4,6 +4,9 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"daily-journal/internal/config"
+	"daily-journal/internal/standup"
 )
 
 // examples sit under the command list and cover the shapes that a synopsis
@@ -14,6 +17,8 @@ var examples = [][2]string{
 	{`journal open yesterday`, "Any date expression works"},
 	{`journal open "last friday"`, ""},
 	{`journal calendar`, "Browse the month, read and edit entries"},
+	{`journal daily`, "Yesterday and today: notes and git commits"},
+	{`journal daily --days 3`, "Cover the weekend too"},
 	{`journal review`, "Good, bad and mad over the last two weeks"},
 	{`journal review --weeks 3`, "Any window length"},
 	{`journal search roadmap`, "Full-text search"},
@@ -25,6 +30,7 @@ var configRows = [][2]string{
 	{"AUTOSYNC=true", "Commit and push without asking"},
 	{"GIT_BRANCH=main", "Branch used for pull and push"},
 	{`JOURNAL_DIR="$HOME/journal"`, "Where the journal lives"},
+	{`PROJECTS_DIR="$HOME/projects"`, "Repositories 'journal daily' reads git activity from"},
 	{"SPRINT_START=2026-07-06", "First day of a sprint, for 'journal review'"},
 }
 
@@ -121,6 +127,7 @@ func (a *App) showConfiguration() {
 	p.Field("Journal directory", a.Journal.Dir, 18)
 	p.Field("Config file", a.Config.Path, 18)
 	p.Field("Editor", editorLabel(a.Config.Editor), 18)
+	p.Field("Projects directory", projectsLabel(a.Config.ProjectsDir), 18)
 	p.Blank()
 
 	width := 0
@@ -143,6 +150,18 @@ func (a *App) showConfiguration() {
 func editorLabel(configured string) string {
 	if configured == "" {
 		return "$EDITOR (fallback: code > vim > nano)"
+	}
+	return configured
+}
+
+// projectsLabel describes the git side of `journal daily`, which needs both a
+// directory to look in and the git-standup helper to look with.
+func projectsLabel(configured string) string {
+	if configured == "" {
+		return "unset (set " + config.KeyProjectsDir + " for git activity in 'journal daily')"
+	}
+	if !standup.Available() {
+		return configured + " (" + standup.Binary + " not installed)"
 	}
 	return configured
 }

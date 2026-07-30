@@ -146,6 +146,41 @@ func TestLoadSprintStart(t *testing.T) {
 	}
 }
 
+// TestLoadProjectsDir: the git side of `journal daily` is off until the
+// directory holding the repositories is named, and `~` in it is expanded like
+// everywhere else.
+func TestLoadProjectsDir(t *testing.T) {
+	env := testEnv(t, nil)
+	if cfg, err := Load(env); err != nil {
+		t.Fatal(err)
+	} else if cfg.ProjectsDir != "" {
+		t.Errorf("ProjectsDir = %q, want empty without a config file", cfg.ProjectsDir)
+	}
+
+	writeConfig(t, env, "PROJECTS_DIR=\"~/code/work\"   # where the repositories live\n")
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(env.Home, "code/work"); cfg.ProjectsDir != want {
+		t.Errorf("ProjectsDir = %q, want %q", cfg.ProjectsDir, want)
+	}
+
+	// The config file wins over the environment, as it does for JOURNAL_DIR.
+	env = testEnv(t, map[string]string{"PROJECTS_DIR": "/from/env"})
+	if cfg, err := Load(env); err != nil {
+		t.Fatal(err)
+	} else if cfg.ProjectsDir != "/from/env" {
+		t.Errorf("ProjectsDir = %q, want the environment's value", cfg.ProjectsDir)
+	}
+	writeConfig(t, env, "PROJECTS_DIR=/from/file\n")
+	if cfg, err := Load(env); err != nil {
+		t.Fatal(err)
+	} else if cfg.ProjectsDir != "/from/file" {
+		t.Errorf("ProjectsDir = %q, want the config file's value", cfg.ProjectsDir)
+	}
+}
+
 // TestLoadIgnoresRetiredKeys covers config files written for earlier versions:
 // keys that no longer exist must be skipped, never rejected.
 func TestLoadIgnoresRetiredKeys(t *testing.T) {

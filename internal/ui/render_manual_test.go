@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 
 	"daily-journal/internal/journal"
+	"daily-journal/internal/standup"
 )
 
 // TestRenderPreview prints the interactive views to stdout so their layout can
@@ -76,4 +77,42 @@ func TestRenderReviewPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log("\n" + RenderReviewStatic(Default, review, 118))
+}
+
+// TestRenderDailyPreview prints the stand-up view so its layout can be eyeballed
+// with `go test -run TestRenderDailyPreview -v ./internal/ui`.
+func TestRenderDailyPreview(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/entries", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]string{
+		"2026-07-28": "# 2026-07-28\n\n" +
+			"**09:12** - Stand-up: taking the logback bump through the last four services.\n\n" +
+			"**11:40** - The classpath error was a missing protobuf schema, not the Scala 3 move. [#good]\n\n" +
+			"- reviewed the migration plan\n- paired with Loic on the parser\n",
+		"2026-07-27": "# 2026-07-27\n\n" +
+			"**17:05** - Shipped the GitHub Packages switch on stats-service.\n",
+	}
+	for slug, body := range entries {
+		if err := os.WriteFile(dir+"/entries/"+slug+".md", []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	now := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
+	j := journal.New(dir, func() time.Time { return now })
+	source := &fakeDailySource{journal: j, report: sampleReport()}
+
+	m := newDailyModel(Default, source, journal.DefaultDailyDays, 120, 32)
+	loaded, _ := m.Update(standupLoadedMsg{report: source.report})
+	t.Log("\n" + loaded.(dailyModel).View())
+
+	// The same view while git-standup is still running, and once it turns out to
+	// be missing.
+	t.Log("\n" + m.View())
+	missing, _ := m.Update(standupLoadedMsg{err: standup.ErrNotInstalled})
+	t.Log("\n" + missing.(dailyModel).View())
+
+	t.Log("\n" + RenderDailyStatic(Default, j.Daily(journal.DailyOptions{}), source.report, nil, 118))
 }
