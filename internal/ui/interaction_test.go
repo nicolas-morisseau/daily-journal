@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"daily-journal/internal/journal"
+	"daily-journal/internal/standup"
 )
 
 // errTest stands in for an editor failure.
@@ -82,7 +82,7 @@ func newCalendarFixture(t *testing.T) (calendarModel, *fakeSource, time.Time) {
 	j := journal.New(dir, func() time.Time { return now })
 	source := newFakeSource(j)
 
-	m := calendarModel{theme: Default, source: source, entry: viewport.New(40, 10), width: 120, height: 32}
+	m := newCalendarModel(Default, source, 120, 32)
 	m.setMonth(journal.MonthOf(now))
 	m.selectDay(now)
 	return m, source, j.Today()
@@ -313,6 +313,282 @@ func TestCalendarReviewEditReloadsBoth(t *testing.T) {
 		t.Errorf("the calendar should have reloaded: %d words, was %d", after.entryWords, before)
 	}
 }
+
+// --- the git activity panel --------------------------------------------------
+
+// sampleDayReport is one day's git activity: two repositories, three commits,
+// timed the way RunDay asks git to print them.
+func sampleDayReport() standup.Report {
+	return standup.Report{
+		Dir:  "/Users/dev/projects",
+		Days: 1,
+		Repos: []standup.Repo{
+			{Path: "/Users/dev/projects/stats-service", Commits: []standup.Commit{
+				{Hash: "676ee18", Subject: "chore(log): bump the library", When: "09:41", Author: "dev"},
+				{Hash: "468a5d8", Subject: "fix: the classpath", When: "14:02", Author: "dev"},
+			}},
+			{Path: "/Users/dev/projects/mailer-service", Commits: []standup.Commit{
+				{Hash: "9329a3a", Subject: "feat: migrate the registry", When: "17:20", Author: "dev"},
+			}},
+		},
+	}
+}
+
+// standupAnswer runs a command and returns the git-standup answer it carries. The
+// view batches the run with the spinner's first tick, so the batch is walked.
+func standupAnswer(t *testing.T, cmd tea.Cmd) (dayStandupLoadedMsg, bool) {
+	t.Helper()
+	if cmd == nil {
+		return dayStandupLoadedMsg{}, false
+	}
+	switch msg := cmd().(type) {
+	case dayStandupLoadedMsg:
+		return msg, true
+	case tea.BatchMsg:
+		for _, inner := range msg {
+			if answer, ok := standupAnswer(t, inner); ok {
+				return answer, true
+			}
+		}
+	}
+	return dayStandupLoadedMsg{}, false
+}
+
+// openGitPanel puts the panel up and lets its first run land, which is the state
+// every test below starts from.
+func openGitPanel(t *testing.T, m calendarModel) calendarModel {
+	t.Helper()
+	model, cmd := m.Update(keyMsg("s"))
+	answer, ok := standupAnswer(t, cmd)
+	if !ok {
+		t.Fatal("opening the panel should ask for the day's git activity")
+	}
+	model, _ = model.(calendarModel).Update(answer)
+	return model.(calendarModel)
+}
+
+// TestCalendarGitPanelShowsTheSelectedDay is what the panel exists for: the
+// commits of the day the calendar is sitting on, and of no other day.
+func TestCalendarGitPanelShowsTheSelectedDay(t *testing.T) {
+	m, source, today := newCalendarFixture(t)
+	source.dayReports = map[string]standup.Report{today.Format("2006-01-02"): sampleDayReport()}
+
+	if strings.Contains(m.View(), "GIT") {
+		t.Error("the panel should stay down until it is asked for")
+	}
+
+	m = openGitPanel(t, m)
+	if source.dayStandupCalls != 1 {
+		t.Errorf("%d runs, want the one for the selected day", source.dayStandupCalls)
+	}
+	if got := source.dayStandupDays[0]; got != "2026-07-28" {
+		t.Errorf("read the activity of %s, want the selected day", got)
+	}
+
+	// The subjects are cut to the column's width, so only their start shows.
+	view := m.View()
+	for _, want := range []string{"GIT", "3 commits", "stats-service", "676ee18",
+		"chore(", "09:41", "mailer-service"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the panel should show %q:\n%s", want, view)
+		}
+	}
+	// It shares the middle column with the notes; the stats keep theirs.
+	if !m.showInsight() {
+		t.Error("the stats panel should keep its column")
+	}
+	if !strings.Contains(view, "Tuesday, 28 July 2026") {
+		t.Error("the markdown should keep its place")
+	}
+}
+
+// TestCalendarGitPanelFollowsTheSelection: the panel is about the selected day, so
+// moving the selection re-reads it and never shows another day's commits.
+func TestCalendarGitPanelFollowsTheSelection(t *testing.T) {
+	m, source, today := newCalendarFixture(t)
+	source.dayReports = map[string]standup.Report{
+		today.Format("2006-01-02"): sampleDayReport(),
+		"2026-07-29":               {Repos: []standup.Repo{{Path: "/p/other-service", Commits: []standup.Commit{{Hash: "abc1234", Subject: "docs: the README", When: "11:03"}}}}},
+	}
+	m = openGitPanel(t, m)
+
+	model, cmd := m.Update(keyMsg("right"))
+	m = model.(calendarModel)
+	// Until the new day's answer lands, the panel says it is reading rather than
+	// leaving the previous day's commits under another date.
+	if got := m.View(); strings.Contains(got, "stats-service") {
+		t.Errorf("the previous day's commits are still up:\n%s", got)
+	}
+
+	answer, ok := standupAnswer(t, cmd)
+	if !ok {
+		t.Fatal("no run for the new day")
+	}
+	if source.dayStandupCalls != 2 || source.dayStandupDays[1] != "2026-07-29" {
+		t.Fatalf("moving a day should re-read it, days = %v", source.dayStandupDays)
+	}
+	model, _ = m.Update(answer)
+	view := model.(calendarModel).View()
+	if !strings.Contains(view, "other-service") || !strings.Contains(view, "1 commit") {
+		t.Errorf("the new day's commits should be up:\n%s", view)
+	}
+}
+
+// TestCalendarGitPanelDropsAStaleAnswer: the helper takes seconds, so the day can
+// have moved by the time it answers. That answer belongs to another day.
+func TestCalendarGitPanelDropsAStaleAnswer(t *testing.T) {
+	m, source, today := newCalendarFixture(t)
+	source.dayReports = map[string]standup.Report{today.Format("2006-01-02"): sampleDayReport()}
+
+	model, cmd := m.Update(keyMsg("s"))
+	m = model.(calendarModel)
+	stale, ok := standupAnswer(t, cmd)
+	if !ok {
+		t.Fatal("opening the panel should start a run")
+	}
+
+	// Two days on while the helper reads. Neither starts a second walk of the
+	// repositories: the one in flight is followed by a catch-up instead.
+	for _, pressed := range []string{"right", "right"} {
+		model, cmd = m.Update(keyMsg(pressed))
+		m = model.(calendarModel)
+		if cmd != nil {
+			t.Errorf("%q started a run while one was already in flight", pressed)
+		}
+	}
+	if source.dayStandupCalls != 1 {
+		t.Errorf("%d runs, want one in flight at a time", source.dayStandupCalls)
+	}
+
+	// The answer for the day the selection left is dropped, and the day now on
+	// screen is asked for instead.
+	model, cmd = m.Update(stale)
+	m = model.(calendarModel)
+	if strings.Contains(m.View(), "stats-service") {
+		t.Error("the stale report should not be shown against another day")
+	}
+
+	answer, ok := standupAnswer(t, cmd)
+	if !ok {
+		t.Fatal("the stale answer should be followed by a catch-up run")
+	}
+	if !answer.day.Equal(m.selected) {
+		t.Errorf("the catch-up run read %s, want the day on screen %s", answer.day, m.selected)
+	}
+	if source.dayStandupCalls != 2 || source.dayStandupDays[1] != "2026-07-30" {
+		t.Fatalf("days read = %v, want the day on screen second", source.dayStandupDays)
+	}
+}
+
+// TestCalendarGitPanelClosesAgain checks the toggle, and that a closed panel stops
+// following the day: nothing should keep walking a directory of repositories.
+func TestCalendarGitPanelClosesAgain(t *testing.T) {
+	m, source, _ := newCalendarFixture(t)
+	m = openGitPanel(t, m)
+
+	m = send(t, m, "s")
+	if m.gitOpen {
+		t.Fatal("s should take the panel down")
+	}
+	view := m.View()
+	if strings.Contains(view, "GIT") {
+		t.Errorf("the panel should be gone:\n%s", view)
+	}
+	if !m.showInsight() {
+		t.Error("the insight panel should have its column back")
+	}
+
+	for _, pressed := range []string{"right", "right"} {
+		model, cmd := m.Update(keyMsg(pressed))
+		m = model.(calendarModel)
+		if cmd != nil {
+			t.Errorf("%q asked for git activity with the panel down", pressed)
+		}
+	}
+	if source.dayStandupCalls != 1 {
+		t.Errorf("%d runs, a closed panel should not read anything", source.dayStandupCalls)
+	}
+}
+
+// TestCalendarGitPanelReportsAMissingHelper: an optional tool that is not there is
+// worth a line in the panel, not a failure that takes the calendar down.
+func TestCalendarGitPanelReportsAMissingHelper(t *testing.T) {
+	m, source, _ := newCalendarFixture(t)
+	source.dayStandupErr = standup.ErrNotInstalled
+
+	m = openGitPanel(t, m)
+	view := m.View()
+	if !strings.Contains(view, standup.Binary+" missing") {
+		t.Errorf("the heading should say the helper is missing:\n%s", view)
+	}
+	// The hint is wrapped to a 24-column panel, so only its words survive whole.
+	if !strings.Contains(view, "brew") || !strings.Contains(view, "installed") {
+		t.Errorf("the panel should say how to get it:\n%s", view)
+	}
+	if !errors.Is(m.gitErr, standup.ErrNotInstalled) {
+		t.Errorf("gitErr = %v, want the missing helper", m.gitErr)
+	}
+	// And the day is still readable beside it.
+	if !strings.Contains(view, "Tuesday, 28 July 2026") {
+		t.Error("the markdown should be untouched")
+	}
+}
+
+// TestCalendarGitPanelSitsBesideOrUnderTheNotes: the panel shares the middle
+// column with the day's notes, and where it lands depends on the room there is.
+// Whatever happens, the stats keep their column.
+func TestCalendarGitPanelSitsBesideOrUnderTheNotes(t *testing.T) {
+	base, source, today := newCalendarFixture(t)
+	source.dayReports = map[string]standup.Report{today.Format("2006-01-02"): sampleDayReport()}
+	base = openGitPanel(t, base)
+
+	cases := []struct {
+		width   int
+		beside  bool
+		insight bool
+	}{
+		{200, true, true},
+		{140, true, true},
+		{120, false, true},
+		{80, false, false},
+	}
+	for _, c := range cases {
+		model, _ := base.Update(tea.WindowSizeMsg{Width: c.width, Height: 30})
+		m := model.(calendarModel)
+
+		if m.gitBeside() != c.beside {
+			t.Errorf("width %d: beside the notes = %v, want %v", c.width, m.gitBeside(), c.beside)
+		}
+		if m.showInsight() != c.insight {
+			t.Errorf("width %d: the stats panel should not have moved, showing = %v",
+				c.width, m.showInsight())
+		}
+		// However they are arranged, both are up and readable.
+		view := m.View()
+		for _, want := range []string{"stats-service", "Tuesday, 28 July 2026"} {
+			if !strings.Contains(view, want) {
+				t.Errorf("width %d lost %q:\n%s", c.width, want, view)
+			}
+		}
+		if m.entry.Width < minEntryPaneWidth {
+			t.Errorf("width %d: the notes shrank to %d columns", c.width, m.entry.Width)
+		}
+		if m.entry.Height < 3 || m.git.Height < 3 {
+			t.Errorf("width %d: entry %d rows, git %d rows", c.width, m.entry.Height, m.git.Height)
+		}
+
+		// Stacked or not, the middle column comes out as tall as the panels beside
+		// it, so the view is the height it would be with the panel down.
+		closed := send(t, m, "s")
+		if got, want := viewRows(view), viewRows(closed.View()); got != want {
+			t.Errorf("width %d: the view is %d rows with the panel up, %d without",
+				c.width, got, want)
+		}
+	}
+}
+
+// viewRows counts the rows a rendered view takes.
+func viewRows(view string) int { return len(strings.Split(view, "\n")) }
 
 func TestCalendarQuit(t *testing.T) {
 	m, _, _ := newCalendarFixture(t)

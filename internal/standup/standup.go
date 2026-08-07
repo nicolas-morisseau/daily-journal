@@ -103,6 +103,38 @@ func Run(ctx context.Context, dir string, days int) (Report, error) {
 	if days < 1 {
 		days = DefaultDays
 	}
+	report, err := run(ctx, dir, "-d", strconv.Itoa(days))
+	report.Days = days
+	return report, err
+}
+
+// dayLayout is how a day is handed to the helper's -A and -B, which pass it
+// straight to `git log`. Midnight is spelled out so a bare date can never be read
+// as anything else.
+const dayLayout = "2006-01-02 15:04"
+
+// RunDay reports the git activity of a single day in dir.
+//
+// The helper's -d counts days back from now, which would carry every commit
+// since; -A and -B bound the log by date instead, so a day in the past gets
+// exactly its own commits. The dates are the day's own midnight and the next,
+// read in the machine's timezone the way git reads them.
+//
+// Commit times replace the relative dates Run leaves in place: inside a panel
+// that is one day wide, "3 hours ago" says less than "14:33".
+func RunDay(ctx context.Context, dir string, day time.Time) (Report, error) {
+	from := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
+	report, err := run(ctx, dir,
+		"-D", "format:%H:%M",
+		"-A", from.Format(dayLayout),
+		"-B", from.AddDate(0, 0, 1).Format(dayLayout))
+	report.Days = 1
+	return report, err
+}
+
+// run shells out to the helper, bounded by the window flags it is given. `-s`
+// keeps it quiet about the repositories that saw no activity.
+func run(ctx context.Context, dir string, window ...string) (Report, error) {
 	if !Available() {
 		return Report{}, ErrNotInstalled
 	}
@@ -113,7 +145,7 @@ func Run(ctx context.Context, dir string, days int) (Report, error) {
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "standup", "-s", "-d", strconv.Itoa(days))
+	cmd := exec.CommandContext(ctx, "git", append([]string{"standup", "-s"}, window...)...)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -124,7 +156,7 @@ func Run(ctx context.Context, dir string, days int) (Report, error) {
 	// report beats none: the repositories it did walk are the recent ones.
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		report := Parse(stdout.String())
-		report.Dir, report.Days = dir, days
+		report.Dir = dir
 		return report, fmt.Errorf("%s gave up after %s in %s", Binary, Timeout, dir)
 	}
 	if err != nil {
@@ -136,7 +168,7 @@ func Run(ctx context.Context, dir string, days int) (Report, error) {
 	}
 
 	report := Parse(stdout.String())
-	report.Dir, report.Days = dir, days
+	report.Dir = dir
 	return report, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"daily-journal/internal/config"
 	"daily-journal/internal/dateparse"
@@ -23,6 +24,16 @@ func (s viewSource) Standup(days int) (standup.Report, error) {
 	return s.app.standup(days)
 }
 
+// DayStandup reads the git activity of one day, which is what the calendar's git
+// panel shows for the day it is sitting on.
+func (s viewSource) DayStandup(day time.Time) (standup.Report, error) {
+	dir, err := s.app.projectsDir()
+	if err != nil {
+		return standup.Report{}, err
+	}
+	return standup.RunDay(context.Background(), dir, day)
+}
+
 // Capture appends a timestamped line to today's entry, which is what typing in
 // the stand-up view does.
 func (s viewSource) Capture(text string) error {
@@ -30,17 +41,26 @@ func (s viewSource) Capture(text string) error {
 	return err
 }
 
-// standup runs git-standup over the configured projects directory.
+// projectsDir is the directory holding the repositories git-standup walks.
 //
 // An unset PROJECTS_DIR is reported rather than guessed at: the directory holding
 // someone's repositories is not something to go looking for.
-func (a *App) standup(days int) (standup.Report, error) {
+func (a *App) projectsDir() (string, error) {
 	dir := strings.TrimSpace(a.Config.ProjectsDir)
 	if dir == "" {
-		return standup.Report{}, fmt.Errorf(
+		return "", fmt.Errorf(
 			"no %s in %s\n\nPoint it at the directory holding your repositories and the commits of\n"+
 				"the last day show up here:\n  %s=\"$HOME/projects\"",
 			config.KeyProjectsDir, a.Config.Path, config.KeyProjectsDir)
+	}
+	return dir, nil
+}
+
+// standup runs git-standup over the configured projects directory.
+func (a *App) standup(days int) (standup.Report, error) {
+	dir, err := a.projectsDir()
+	if err != nil {
+		return standup.Report{}, err
 	}
 	return standup.Run(context.Background(), dir, days)
 }

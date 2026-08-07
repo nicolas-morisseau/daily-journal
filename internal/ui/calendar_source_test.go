@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"daily-journal/internal/journal"
+	"daily-journal/internal/standup"
 )
 
 // fakeSource is a CalendarSource backed by a real journal on disk, with a
@@ -22,6 +23,17 @@ type fakeSource struct {
 	periodErr error
 	// anchor is the sprint start ReviewPeriod hands out, zero for a rolling window.
 	anchor time.Time
+
+	// dayReports is the git activity DayStandup hands out, by YYYY-MM-DD. A day
+	// that is not in it saw no commit.
+	dayReports map[string]standup.Report
+	// dayStandupErr fails DayStandup instead of answering it, when set.
+	dayStandupErr error
+	// dayStandupCalls counts the runs, and dayStandupDays lists the days they were
+	// asked for, in order: the panel must follow the selection without starting a
+	// run per keystroke.
+	dayStandupCalls int
+	dayStandupDays  []string
 }
 
 func newFakeSource(j *journal.Journal) *fakeSource { return &fakeSource{journal: j} }
@@ -46,6 +58,16 @@ func (s *fakeSource) ReviewPeriod(day time.Time) (journal.ReviewOptions, error) 
 		return journal.ReviewOptions{}, s.periodErr
 	}
 	return journal.ReviewOptions{To: day, Anchor: s.anchor}, nil
+}
+
+func (s *fakeSource) DayStandup(day time.Time) (standup.Report, error) {
+	slug := day.Format("2006-01-02")
+	s.dayStandupCalls++
+	s.dayStandupDays = append(s.dayStandupDays, slug)
+	if s.dayStandupErr != nil {
+		return standup.Report{}, s.dayStandupErr
+	}
+	return s.dayReports[slug], nil
 }
 
 func (s *fakeSource) EditCommand(day time.Time) (*exec.Cmd, error) {

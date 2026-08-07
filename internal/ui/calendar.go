@@ -5,12 +5,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"daily-journal/internal/dateparse"
 	"daily-journal/internal/journal"
+	"daily-journal/internal/standup"
 )
 
 // CalendarSource supplies the calendar view with everything it shows, so the
@@ -28,6 +30,10 @@ type CalendarSource interface {
 	Insight(day time.Time, opts journal.InsightOptions) journal.Insight
 	// ReviewPeriod is the period to review around a day.
 	ReviewPeriod(day time.Time) (journal.ReviewOptions, error)
+	// DayStandup reads the git activity of one day, for the panel `s` puts up. Its
+	// error is shown inside that panel rather than ending the view: the journal is
+	// still worth reading when the helper is missing or unconfigured.
+	DayStandup(day time.Time) (standup.Report, error)
 }
 
 // Panel widths, in content columns. The centre pane takes whatever is left.
@@ -41,6 +47,16 @@ const (
 
 // editorFinishedMsg is delivered once the foreground editor exits.
 type editorFinishedMsg struct{ err error }
+
+// dayStandupLoadedMsg carries the outcome of one git-standup run for a day. The
+// day it was asked for travels with it: the selection can move several times
+// while the helper walks a directory of repositories, and a report that no longer
+// belongs to the day on screen is worth nothing.
+type dayStandupLoadedMsg struct {
+	day    time.Time
+	report standup.Report
+	err    error
+}
 
 // calendarModel is the Bubble Tea model behind ShowCalendar.
 type calendarModel struct {
@@ -62,6 +78,23 @@ type calendarModel struct {
 	// itself is on screen.
 	review *reviewModel
 
+	// gitOpen is whether the git activity panel is up. It stays down until asked
+	// for: reading a directory of repositories takes seconds, and the calendar is
+	// mostly used without it.
+	gitOpen bool
+	// git holds the panel's commits, scrolled on its own.
+	git viewport.Model
+	// gitReport is the day's activity. It always belongs to the selected day: it is
+	// dropped as soon as the day moves, and a run that comes back for another day
+	// is never stored.
+	gitReport standup.Report
+	// gitErr is why the panel has nothing to show, if anything.
+	gitErr error
+	// gitLoading is true while the helper runs. Only one run is in flight at a
+	// time, and the day may have moved by the time it comes back.
+	gitLoading bool
+	gitSpin    spinner.Model
+
 	width, height int
 
 	// status is a transient message shown in place of the hints.
@@ -74,13 +107,7 @@ type calendarModel struct {
 // ShowCalendar runs the full-screen calendar. It returns when the user quits;
 // entries are edited in place rather than handed back to the caller.
 func ShowCalendar(theme *Theme, source CalendarSource, month journal.Month) error {
-	m := calendarModel{
-		theme:  theme,
-		source: source,
-		entry:  viewport.New(40, 10),
-		width:  TerminalWidth(),
-		height: TerminalHeight(),
-	}
+	m := newCalendarModel(theme, source, TerminalWidth(), TerminalHeight())
 	m.setMonth(month)
 
 	// Land on today when it belongs to the requested month, otherwise the 1st.
@@ -91,8 +118,23 @@ func ShowCalendar(theme *Theme, source CalendarSource, month journal.Month) erro
 		m.selectDay(time.Date(month.Year, month.Month, 1, 0, 0, 0, 0, today.Location()))
 	}
 
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
+}
+
+func newCalendarModel(theme *Theme, source CalendarSource, width, height int) calendarModel {
+	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
+	spin.Style = theme.Accent
+
+	return calendarModel{
+		theme:   theme,
+		source:  source,
+		entry:   viewport.New(40, 10),
+		git:     viewport.New(minEntryPaneWidth, 10),
+		gitSpin: spin,
+		width:   width,
+		height:  height,
+	}
 }
 
 func (m calendarModel) Init() tea.Cmd { return nil }
@@ -150,6 +192,75 @@ func (m calendarModel) renderEmptyState() string {
 	}, "\n")
 }
 
+// --- git panel ---------------------------------------------------------------
+
+// toggleGit puts the git activity panel up or takes it down. Opening it reads the
+// selected day, so what it shows is never left over from an earlier look.
+func (m *calendarModel) toggleGit() tea.Cmd {
+	m.gitOpen = !m.gitOpen
+	// The markdown has to be rewrapped to the column it just lost or got, and the
+	// reader keeps their place through it.
+	offset := m.entry.YOffset
+	m.loadEntry()
+	m.entry.SetYOffset(offset)
+	return m.gitFollow()
+}
+
+// gitFollow points the panel at the selected day: what is on screen belongs to
+// another day now, so it goes and the day's own activity is asked for.
+func (m *calendarModel) gitFollow() tea.Cmd {
+	if !m.gitOpen {
+		return nil
+	}
+	m.gitReport, m.gitErr = standup.Report{}, nil
+	m.git.GotoTop()
+	return m.requestGit()
+}
+
+// requestGit asks the source for the selected day's activity, unless a run is
+// already in flight: the helper walks every repository it is given, which takes
+// seconds, and holding the arrow key down would otherwise start a run per day.
+// gitLoaded starts the next one when the day has moved on meanwhile.
+func (m *calendarModel) requestGit() tea.Cmd {
+	if !m.gitOpen {
+		return nil
+	}
+	if m.gitLoading {
+		m.refreshGit()
+		return nil
+	}
+	m.gitLoading = true
+	m.refreshGit()
+
+	day, source := m.selected, m.source
+	return tea.Batch(m.gitSpin.Tick, func() tea.Msg {
+		report, err := source.DayStandup(day)
+		return dayStandupLoadedMsg{day: day, report: report, err: err}
+	})
+}
+
+// gitLoaded takes in a finished run. A report for a day the selection has left is
+// dropped rather than shown against the wrong day, and the day now on screen is
+// asked for instead.
+func (m calendarModel) gitLoaded(msg dayStandupLoadedMsg) (tea.Model, tea.Cmd) {
+	m.gitLoading = false
+	if !msg.day.Equal(m.selected) {
+		return m, m.requestGit()
+	}
+	m.gitReport, m.gitErr = msg.report, msg.err
+	m.refreshGit()
+	return m, nil
+}
+
+// refreshGit re-renders the panel at the current size, keeping the scroll where
+// the reader left it.
+func (m *calendarModel) refreshGit() {
+	if !m.gitOpen {
+		return
+	}
+	m.git.SetContent(m.renderGitContent())
+}
+
 // showInsight reports whether the terminal is wide enough for the side panel.
 func (m calendarModel) showInsight() bool {
 	return m.width >= calendarPaneWidth+insightPaneWidth+minEntryPaneWidth+14
@@ -160,28 +271,61 @@ func (m calendarModel) showCalendarPane() bool {
 	return m.width >= calendarPaneWidth+minEntryPaneWidth+10
 }
 
-// layout recomputes the centre pane from the terminal size.
-func (m *calendarModel) layout() {
-	// Each panel costs 2 columns of border plus 2 of padding, and the panels are
-	// separated by a single space.
-	const chrome = 4
-
+// centreWidth is the content width of the middle column, which the notes have to
+// themselves until the git panel is put up.
+func (m calendarModel) centreWidth() int {
+	// The panels are separated by a single space, and each costs paneChrome columns
+	// of border and padding.
 	width := m.width - 2 // outer margin
 	if m.showCalendarPane() {
-		width -= calendarPaneWidth + chrome + 1
+		width -= calendarPaneWidth + paneChrome + 1
 	}
 	if m.showInsight() {
-		width -= insightPaneWidth + chrome + 1
+		width -= insightPaneWidth + paneChrome + 1
 	}
-	width -= chrome
-	if width < minEntryPaneWidth {
-		width = minEntryPaneWidth
-	}
+	return max(width-paneChrome, minEntryPaneWidth)
+}
 
-	m.entry.Width = width
-	m.entry.Height = m.paneContentHeight() - 2 // the pane header and its rule
-	if m.entry.Height < 3 {
-		m.entry.Height = 3
+// gitBeside reports whether the middle column is wide enough to hold the panel
+// next to the notes. The two share the column evenly, so it takes room for two
+// panes of the width the markdown asks for; under that the panel goes below the
+// notes, which costs height rather than prose width.
+func (m calendarModel) gitBeside() bool {
+	return m.gitOpen && m.centreWidth() >= 2*minEntryPaneWidth+paneChrome+1
+}
+
+// minStackedRows is the shortest a stacked pane may be: its heading, the rule
+// under it and three lines of what it holds.
+const minStackedRows = 5
+
+// layout recomputes the middle column from the terminal size: the notes alone, the
+// notes beside the git panel, or the notes above it.
+func (m *calendarModel) layout() {
+	width := m.centreWidth()
+	rows := m.paneContentHeight()
+
+	m.entry.Width, m.git.Width = width, width
+	m.entry.Height, m.git.Height = max(rows-paneHeadings, 3), max(rows-paneHeadings, 3)
+
+	switch {
+	case m.gitBeside():
+		// Half the column each, the way the stand-up view splits its two panes. An
+		// odd column leaves the spare one to the prose.
+		m.git.Width = (width - paneChrome - 1) / 2
+		m.entry.Width = width - paneChrome - 1 - m.git.Width
+
+	case m.gitOpen:
+		// Stacked, the two panes share the column: their content, plus two border
+		// rows apiece, has to come out as tall as the panels either side. The panel
+		// takes a third of it, and the notes keep the rest — a day is read more often
+		// than its commits are counted.
+		shared := rows - 2*paneBorder
+		git := max(shared/3, minStackedRows)
+		if shared-git < minStackedRows {
+			git = max(shared-minStackedRows, minStackedRows)
+		}
+		m.git.Height = max(git-paneHeadings, 1)
+		m.entry.Height = max(shared-git-paneHeadings, 1)
 	}
 }
 
@@ -200,6 +344,23 @@ func (m calendarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
 		m.width, m.height = size.Width, size.Height
 		m.loadEntry()
+		m.refreshGit()
+	}
+	// The git panel's own messages are answered whatever is on screen: a run
+	// started before the review was opened still lands, and dropping its answer
+	// would leave the panel reading for ever.
+	switch msg := msg.(type) {
+	case dayStandupLoadedMsg:
+		return m.gitLoaded(msg)
+
+	case spinner.TickMsg:
+		if !m.gitLoading {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.gitSpin, cmd = m.gitSpin.Update(msg)
+		m.refreshGit()
+		return m, cmd
 	}
 	if m.review != nil {
 		return m.updateReview(msg)
@@ -216,19 +377,26 @@ func (m calendarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Saved " + m.selected.Format(dateparse.Layout) + ".md"
 		}
 		m.reload()
-		return m, nil
+		return m, mouseAgain
 
 	case tea.KeyMsg:
-		return m.handleKey(msg)
+		return m.apply(msg.String())
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	}
 	return m, nil
 }
 
-func (m calendarModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// apply performs the move a key stands for. It is named rather than driven by the
+// message so a click on a hint can reach exactly the same code.
+func (m calendarModel) apply(key string) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.err = nil
+	// Whatever the key does, the git panel follows the day it lands on.
+	before := m.selected
 
-	switch msg.String() {
+	switch key {
 	case "q", "esc", "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
@@ -238,6 +406,9 @@ func (m calendarModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		m.openReview()
+
+	case "s":
+		return m, m.toggleGit()
 
 	// Moving through the calendar.
 	case "left", "h":
@@ -268,8 +439,22 @@ func (m calendarModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.entry.GotoTop()
 	case "G", "end":
 		m.entry.GotoBottom()
+
+	// The git panel has its own pane, so it has its own two keys.
+	case "J":
+		m.git.ScrollDown(1)
+	case "K":
+		m.git.ScrollUp(1)
 	}
-	return m, nil
+	return m, m.followSelection(before)
+}
+
+// followSelection reloads what the selected day feeds when the day has moved.
+func (m *calendarModel) followSelection(before time.Time) tea.Cmd {
+	if m.selected.Equal(before) {
+		return nil
+	}
+	return m.gitFollow()
 }
 
 // openReview switches to the sprint review of the period the selected day falls
@@ -329,6 +514,172 @@ func (m *calendarModel) shiftMonth(delta int) {
 	m.selectDay(time.Date(next.Year, next.Month, day, 0, 0, 0, 0, loc))
 }
 
+// --- mouse -------------------------------------------------------------------
+
+const (
+	// dayCellWidth is what one day cell costs, the four columns renderDayCell
+	// writes.
+	dayCellWidth = 4
+	// calendarPaneY is the row the panes' top border sits on: the calendar view
+	// renders them straight under its outer padding.
+	calendarPaneY = 1
+	// calendarGridRow is the pane row the first week lands on: the month title, a
+	// blank line and the weekday headers come before it.
+	calendarGridRow = 3
+)
+
+// handleMouse turns a mouse event into the moves the keyboard already makes: a
+// click picks the day or presses the hint it lands on, and the wheel pages the
+// month or scrolls the entry, depending on the pane it is over.
+func (m calendarModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	before := m.selected
+
+	if delta := wheel(msg); delta != 0 {
+		switch {
+		case m.calendarBand().contains(msg.X, msg.Y):
+			m.shiftMonth(delta)
+		case m.gitBand().contains(msg.X, msg.Y):
+			scrollBy(&m.git, delta*wheelLines)
+		case m.entryBand().contains(msg.X, msg.Y):
+			scrollBy(&m.entry, delta*wheelLines)
+		}
+		return m, m.followSelection(before)
+	}
+	if !leftClick(msg) {
+		return m, nil
+	}
+
+	// The hit tests read the pane as it stands on screen, so they run before
+	// anything clears the status line the hints sit under.
+	if day, ok := m.dayAt(msg.X, msg.Y); ok {
+		m.status, m.err = "", nil
+		m.selectDay(day)
+		return m, m.followSelection(before)
+	}
+	if key, ok := m.hintAt(msg.X, msg.Y); ok {
+		return m.apply(key)
+	}
+	return m, nil
+}
+
+// dayAt returns the day the cell under the given screen position holds. The
+// padding cells before the 1st and after the last hold none.
+func (m calendarModel) dayAt(x, y int) (time.Time, bool) {
+	grid := m.gridRect()
+	if !grid.contains(x, y) {
+		return time.Time{}, false
+	}
+	day := m.calendar.Weeks[y-grid.y][(x-grid.x)/dayCellWidth]
+	if day.Padding() {
+		return time.Time{}, false
+	}
+	return day.Date, true
+}
+
+// hintAt returns the key named by the row of the NAVIGATE table under the given
+// screen position.
+func (m calendarModel) hintAt(x, y int) (string, bool) {
+	hints := m.hintsRect()
+	if !hints.contains(x, y) {
+		return "", false
+	}
+	return hintKeyAt(m.hints()[y-hints.y][0], x-hints.x, true)
+}
+
+// entryPaneX is the column the centre pane's border sits on.
+func (m calendarModel) entryPaneX() int {
+	if m.showCalendarPane() {
+		return firstPaneX + calendarPaneWidth + paneChrome + 1
+	}
+	return firstPaneX
+}
+
+// calendarBand, entryBand and gitBand are the column bands the panes occupy, over
+// the whole height of the screen: what the wheel does depends on which pane the
+// pointer is over, not on how far down it sits, and the panes are not the same
+// height. A pane that is not on screen has no band.
+func (m calendarModel) calendarBand() rect {
+	if !m.showCalendarPane() {
+		return rect{}
+	}
+	return rect{x: firstPaneX, y: 0, w: calendarPaneWidth + paneChrome, h: m.height}
+}
+
+func (m calendarModel) entryBand() rect {
+	band := rect{x: m.entryPaneX(), y: 0, w: m.entry.Width + paneChrome, h: m.height}
+	if m.gitOpen && !m.gitBeside() {
+		// Stacked, the notes stop where the panel starts.
+		band.y, band.h = calendarPaneY, m.entry.Height+paneRows
+	}
+	return band
+}
+
+// gitBand is where the panel sits: to the right of the notes, or under them.
+func (m calendarModel) gitBand() rect {
+	switch {
+	case !m.gitOpen:
+		return rect{}
+	case m.gitBeside():
+		return rect{
+			x: m.entryPaneX() + m.entry.Width + paneChrome + 1,
+			y: 0,
+			w: m.git.Width + paneChrome,
+			h: m.height,
+		}
+	}
+	return rect{
+		x: m.entryPaneX(),
+		y: calendarPaneY + m.entry.Height + paneRows,
+		w: m.git.Width + paneChrome,
+		h: m.git.Height + paneRows,
+	}
+}
+
+// gridRect is where the day cells sit, the weekday headers excluded.
+func (m calendarModel) gridRect() rect {
+	if !m.showCalendarPane() {
+		return rect{}
+	}
+	return rect{
+		x: firstPaneX + paneContentInset,
+		y: calendarPaneY + paneBorder + calendarGridRow,
+		w: len(journal.WeekdayHeaders) * dayCellWidth,
+		h: len(m.calendar.Weeks),
+	}
+}
+
+// hintsRect is where the NAVIGATE rows sit. renderKeys writes each of them as a
+// leading space, the keys, then the label, which is why the keys start one column
+// into the pane's content.
+func (m calendarModel) hintsRect() rect {
+	if !m.showCalendarPane() {
+		return rect{}
+	}
+	return rect{
+		x: firstPaneX + paneContentInset + 1,
+		y: calendarPaneY + paneBorder + m.hintsRow(),
+		w: calendarPaneWidth - 1,
+		h: len(m.hints()),
+	}
+}
+
+// hintsRow is the pane row the first hint lands on. It walks the lines
+// renderCalendarPane writes, so the two must change together.
+func (m calendarModel) hintsRow() int {
+	// The grid, a blank line, the legend, another blank line.
+	row := calendarGridRow + len(m.calendar.Weeks) + 1 + len(legendItems(m.theme)) + 1
+	// Then whichever of the status and the failure is up, each with the blank line
+	// under it.
+	if m.status != "" {
+		row += 2
+	}
+	if m.err != nil {
+		row += 2
+	}
+	// And the NAVIGATE label itself.
+	return row + 1
+}
+
 func (m calendarModel) View() string {
 	if m.quit {
 		return ""
@@ -339,32 +690,70 @@ func (m calendarModel) View() string {
 
 	panes := make([]string, 0, 5)
 	if m.showCalendarPane() {
-		panes = append(panes, m.pane(m.renderCalendarPane(), calendarPaneWidth, false), " ")
+		panes = append(panes, m.pane(m.renderCalendarPane(), calendarPaneWidth, 0), " ")
 	}
-	panes = append(panes, m.pane(m.renderEntryPane(), m.entry.Width, true))
+	panes = append(panes, m.renderCentreColumn())
 	if m.showInsight() {
-		panes = append(panes, " ", m.pane(m.renderInsightPane(), insightPaneWidth, true))
+		panes = append(panes, " ", m.pane(m.renderInsightPane(), insightPaneWidth, m.paneContentHeight()))
 	}
 
 	return lipgloss.NewStyle().Padding(1, 1).Render(
 		lipgloss.JoinHorizontal(lipgloss.Top, panes...))
 }
 
-// panePadding is the horizontal padding inside every panel, on each side.
-const panePadding = 1
+// renderCentreColumn is the day itself: the notes, with the git panel beside them
+// when the column is wide enough for two and under them when it is not. However
+// they are arranged, the column comes out the same height as the panels either
+// side of it.
+func (m calendarModel) renderCentreColumn() string {
+	entry := m.pane(m.renderEntryPane(), m.entry.Width, m.entry.Height+paneHeadings)
+	if !m.gitOpen {
+		return entry
+	}
+
+	git := m.pane(m.renderGitPane(), m.git.Width, m.git.Height+paneHeadings)
+	if m.gitBeside() {
+		return lipgloss.JoinHorizontal(lipgloss.Top, entry, " ", git)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, entry, git)
+}
+
+// Every view lays its panels out on the same grid, and the mouse hit tests read
+// it back.
+const (
+	// panePadding is the horizontal padding inside every panel, on each side.
+	panePadding = 1
+	// paneChrome is what a pane's border and padding cost in columns.
+	paneChrome = 2 + 2*panePadding
+	// firstPaneX is the column the leftmost pane's border sits on, one in from
+	// the outer padding every view renders.
+	firstPaneX = 1
+	// paneContentInset is how far a pane's content sits from its own left edge:
+	// its border, then its padding.
+	paneContentInset = 1 + panePadding
+	// paneBorder is what a pane's top border costs above its first content row.
+	paneBorder = 1
+	// paneHeadings is what a pane with a scrolling body costs above it: its heading
+	// and the rule under it.
+	paneHeadings = 2
+	// paneRows is what such a pane takes on screen beyond its viewport: the two
+	// lines above it and its two border rows.
+	paneRows = paneHeadings + 2*paneBorder
+)
 
 // pane wraps content in a rounded border.
 //
 // width is the content width: lipgloss counts padding inside Width, so it is
-// added back here, and every caller can think in terms of usable columns.
-func (m calendarModel) pane(content string, width int, fullHeight bool) string {
+// added back here, and every caller can think in terms of usable columns. A
+// height of zero leaves the pane as tall as what it holds.
+func (m calendarModel) pane(content string, width, height int) string {
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(m.theme.Palette.Border).
 		Padding(0, panePadding).
 		Width(width + 2*panePadding)
-	if fullHeight {
-		style = style.Height(m.paneContentHeight())
+	if height > 0 {
+		style = style.Height(height)
 	}
 	return style.Render(content)
 }
@@ -393,29 +782,51 @@ func (m calendarModel) renderCalendarPane() string {
 }
 
 // keyHints is the navigation table shown inside the calendar pane, the way tock
-// keeps its hints next to the grid.
+// keeps its hints next to the grid. Its rows are clickable, which needs no line
+// of its own: a hint is the key it names, however it is pressed.
 var keyHints = [][2]string{
 	{"← →", "day"},
 	{"↑ ↓", "week"},
 	{"n p", "month"},
 	{"t", "today"},
-	{"j k", "scroll entry"},
 	{"e", "edit entry"},
+	{"s", "git activity"},
 	{"r", "sprint review"},
-	{"q", "quit"},
+}
+
+// quitHint sits at the bottom of the table whatever else fits above it.
+var quitHint = [2]string{"q", "quit"}
+
+// hints is the navigation table as it ends up on screen. The clicking is driven
+// off the same list, so a row that is not up cannot be clicked either.
+//
+// Scrolling is not in it: j k on the notes, J K on the git panel and the wheel on
+// whichever the pointer is over are the keys everyone already tries.
+func (m calendarModel) hints() [][2]string {
+	// Drop the least useful rows rather than let the table run past the pane, the
+	// way the other views' footers give ground. Quitting keeps its place whatever
+	// goes: it is the one key with nowhere else to be read.
+	rows := append([][2]string{}, keyHints...)
+	room := m.paneContentHeight() - m.hintsRow() - 1
+	for len(rows) > 0 && len(rows) > room {
+		rows = rows[:len(rows)-1]
+	}
+	return append(rows, quitHint)
 }
 
 func (m calendarModel) renderKeys() string {
 	t := m.theme
+	hints := m.hints()
+
 	width := 0
-	for _, hint := range keyHints {
+	for _, hint := range hints {
 		if n := lipgloss.Width(hint[0]); n > width {
 			width = n
 		}
 	}
 
 	lines := []string{t.Muted.Render("NAVIGATE")}
-	for _, hint := range keyHints {
+	for _, hint := range hints {
 		pad := strings.Repeat(" ", width-lipgloss.Width(hint[0]))
 		lines = append(lines, " "+t.HelpKey.Render(hint[0])+pad+"  "+t.Muted.Render(hint[1]))
 	}
@@ -439,6 +850,47 @@ func (m calendarModel) renderEntryPane() string {
 
 	header := title + strings.Repeat(" ", gap) + meta
 	return header + "\n" + t.HRule(m.entry.Width) + "\n" + m.entry.View()
+}
+
+// --- git pane ----------------------------------------------------------------
+
+// renderGitPane draws the git activity of the selected day.
+func (m calendarModel) renderGitPane() string {
+	t := m.theme
+	width := m.git.Width
+
+	meta := m.gitMeta()
+	// The panel scrolls, so it says when there is more under the fold.
+	if !m.git.AtBottom() {
+		meta += " ↓"
+	}
+	header := spread(t.Title.Render("GIT"), t.Muted.Render(truncate(meta, width-4)), width)
+	return header + "\n" + t.HRule(width) + "\n" + m.git.View()
+}
+
+// gitMeta counts the day's commits, or says why there are none to count.
+func (m calendarModel) gitMeta() string {
+	switch {
+	case m.gitLoading:
+		return standupReading
+	case m.gitErr != nil:
+		return standupTrouble(m.gitErr)
+	}
+	return plural(m.gitReport.Commits(), "commit", "commits")
+}
+
+// renderGitContent lays the day's commits out, or says what stands in their place.
+func (m calendarModel) renderGitContent() string {
+	t := m.theme
+	switch {
+	case m.gitLoading:
+		return renderStandupReading(t, m.gitSpin)
+	case m.gitErr != nil:
+		return renderStandupProblem(t, m.gitErr, m.git.Width)
+	case m.gitReport.Empty():
+		return t.Muted.Render("No commit on this day.")
+	}
+	return strings.Join(renderStandupRepos(t, m.gitReport, m.git.Width), "\n")
 }
 
 // --- right pane --------------------------------------------------------------

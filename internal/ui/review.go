@@ -28,13 +28,11 @@ const (
 	// minReviewColumnWidth is the narrowest a mood column may get. Below three
 	// of them the view shows one column at a time instead of squeezing.
 	minReviewColumnWidth = 20
-	// reviewPaneChrome is what a pane's border and padding cost in columns.
-	reviewPaneChrome = 2 + 2*panePadding
 	// reviewPageJump is how many notes ctrl+d / ctrl+u move over.
 	reviewPageJump = 5
 	// minReviewWidth and minReviewHeight are the smallest size a layout can be
 	// built on. A terminal that has not reported its size yet says 0 by 0.
-	minReviewWidth  = minReviewColumnWidth + reviewPaneChrome + 2
+	minReviewWidth  = minReviewColumnWidth + paneChrome + 2
 	minReviewHeight = 12
 )
 
@@ -74,7 +72,7 @@ type reviewColumn struct {
 // ShowReview runs the full-screen sprint review over the given period.
 func ShowReview(theme *Theme, source ReviewSource, opts journal.ReviewOptions) error {
 	m := newReviewModel(theme, source, opts, TerminalWidth(), TerminalHeight())
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -153,7 +151,7 @@ func (m *reviewModel) resize(width, height int) {
 // showAllColumns reports whether the terminal fits the three columns side by
 // side. It does not below that, and the view falls back to one column at a time.
 func (m reviewModel) showAllColumns() bool {
-	return m.width >= 3*(minReviewColumnWidth+reviewPaneChrome)+2+2
+	return m.width >= 3*(minReviewColumnWidth+paneChrome)+2+2
 }
 
 // columnWidth is the usable width inside one mood pane.
@@ -161,9 +159,9 @@ func (m reviewModel) columnWidth() int {
 	// Outer margin, then either three panes separated by a space, or one pane.
 	width := m.width - 2
 	if m.showAllColumns() {
-		width = (width - 2 - 3*reviewPaneChrome) / 3
+		width = (width - 2 - 3*paneChrome) / 3
 	} else {
-		width -= reviewPaneChrome
+		width -= paneChrome
 	}
 	if width < minReviewColumnWidth {
 		width = minReviewColumnWidth
@@ -207,24 +205,29 @@ func (m reviewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		if msg.err != nil {
 			m.err = msg.err
-			return m, nil
+			return m, mouseAgain
 		}
 		if m.err == nil {
 			m.status = "Saved " + day.Format(dateparse.Layout) + ".md"
 		}
-		return m, nil
+		return m, mouseAgain
 
 	case tea.KeyMsg:
-		return m.handleKey(msg)
+		return m.apply(msg.String())
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	}
 	return m, nil
 }
 
-func (m reviewModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// apply performs the move a key stands for. It is named rather than driven by the
+// message so a click on a footer hint can reach exactly the same code.
+func (m reviewModel) apply(key string) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.err = nil
 
-	switch msg.String() {
+	switch key {
 	case "q", "esc", "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
@@ -299,6 +302,101 @@ func (m reviewModel) editSelected() tea.Cmd {
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return editorFinishedMsg{err: err}
 	})
+}
+
+// --- mouse -------------------------------------------------------------------
+
+const (
+	// reviewPanesY is the row the mood panes' top border sits on: the title, the
+	// subtitle and a blank line come above them.
+	reviewPanesY = 4
+	// reviewCardsRow is the pane row the first card lands on, under the mood
+	// heading and its rule.
+	reviewCardsRow = 2
+)
+
+// handleMouse turns a mouse event into the moves the keyboard already makes: a
+// click takes the focus to the column and the note it lands on, the wheel scrolls
+// the column it is over, and the footer hints answer to a click as well.
+func (m reviewModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	column, inColumn := m.columnAt(msg.X, msg.Y)
+
+	if delta := wheel(msg); delta != 0 {
+		// Scrolling a column the keyboard is not on is deliberate: reading around a
+		// mood is not the same as moving its selection.
+		if inColumn {
+			scrollBy(&m.columns[column].view, delta*wheelLines)
+		}
+		return m, nil
+	}
+	if !leftClick(msg) {
+		return m, nil
+	}
+
+	if key, ok := m.footerHintAt(msg.X, msg.Y); ok {
+		return m.apply(key)
+	}
+	if !inColumn {
+		return m, nil
+	}
+	m.status, m.err = "", nil
+	m.focus = column
+	if note, ok := m.noteAt(column, msg.Y); ok {
+		m.columns[column].selected = note
+	}
+	m.refresh(true)
+	return m, nil
+}
+
+// columnAt returns the mood column the given screen position falls in.
+func (m reviewModel) columnAt(x, y int) (int, bool) {
+	for i := range m.columns {
+		if m.columnPaneRect(i).contains(x, y) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// columnPaneRect is where a mood pane sits, its border included. Only the focused
+// column is on screen when the terminal is too narrow for the three of them, and
+// the others are nowhere.
+func (m reviewModel) columnPaneRect(i int) rect {
+	width := m.columnWidth() + paneChrome
+	x := firstPaneX
+	switch {
+	case m.showAllColumns():
+		x += i * (width + 1)
+	case i != m.focus:
+		return rect{}
+	}
+	return rect{x: x, y: reviewPanesY, w: width, h: m.paneHeight()}
+}
+
+// noteAt returns the card at a screen row of a column, which is where render left
+// it plus however far the column is scrolled. The blank rows between two cards
+// belong to neither.
+func (m reviewModel) noteAt(column, y int) (int, bool) {
+	c := m.columns[column]
+	row := y - (reviewPanesY + paneBorder + reviewCardsRow) + c.view.YOffset
+	for i, offset := range c.offsets {
+		if row >= offset && row < offset+c.heights[i] {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// footerHintAt returns the key named by the footer hint under the given screen
+// position. A footer reporting an outcome carries no hints to click.
+func (m reviewModel) footerHintAt(x, y int) (string, bool) {
+	if m.err != nil || m.status != "" {
+		return "", false
+	}
+	if y != reviewPanesY+m.paneHeight()+1 {
+		return "", false
+	}
+	return footerKeyAt(m.footerHints(), x-firstPaneX)
 }
 
 // --- column ------------------------------------------------------------------
@@ -445,7 +543,13 @@ func (m reviewModel) renderFooter() string {
 	case m.status != "":
 		return t.Success.Render("✓ " + m.status)
 	}
+	return t.Keys(m.footerHints()...)
+}
 
+// footerHints is the hint table the footer shows, as it ends up on screen. The
+// clicking is driven off the same list, so a hint that was dropped for want of
+// room cannot be clicked either.
+func (m reviewModel) footerHints() [][2]string {
 	leave := "quit"
 	if m.nested {
 		leave = "back to the calendar"
@@ -459,10 +563,10 @@ func (m reviewModel) renderFooter() string {
 		{"q", leave},
 	}
 	// Drop the least useful hints rather than let the footer wrap.
-	for len(hints) > 1 && lipgloss.Width(t.Keys(hints...)) > m.width-2 {
+	for len(hints) > 1 && lipgloss.Width(m.theme.Keys(hints...)) > m.width-2 {
 		hints = hints[:len(hints)-1]
 	}
-	return t.Keys(hints...)
+	return hints
 }
 
 // renderColumnPane draws one mood: its heading, its count and its cards.

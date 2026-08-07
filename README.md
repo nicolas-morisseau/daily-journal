@@ -57,7 +57,8 @@ sync — because the journal *is* a git repository.
   learn.
 - **A calendar to read back** — full-screen month view with the selected day's
   markdown rendered next to it, plus streaks, word counts and your most used
-  tags. Press `e` on any day to edit it in place.
+  tags. Press `e` on any day to edit it in place, or `s` to see what you
+  committed that day beside what you wrote.
 - **A stand-up view** — `journal daily` puts yesterday and today's notes next to
   the commits you pushed in the same window, and takes a new note straight from
   the keyboard. What you need to talk for two minutes, on one screen.
@@ -187,8 +188,52 @@ entry — creating it if needed — and picks the view back up when you quit.
 | --- | --- | --- | --- |
 | `←` `→` | day | `j` `k` `^d` `^u` `g` `G` | scroll the entry |
 | `↑` `↓` | week | `e` / `enter` | edit the day |
-| `n` `p` | month | `r` | sprint review of that day |
-| `t` | today | `q` | quit |
+| `n` `p` | month | `s` | git activity of that day |
+| `t` | today | `r` | sprint review of that day |
+| | | `q` | quit |
+
+The mouse does the same work: click a day to select it, click a row of the
+NAVIGATE table to press the key it names, and turn the wheel to page months over
+the grid or to scroll the markdown over the middle panel. Mouse reporting is on
+in all three views, so selecting text with the pointer takes holding `shift` —
+what your terminal already does inside `vim` or `less`.
+
+#### What you committed that day
+
+`s` puts up a panel of the day's git activity, in the middle column with the
+day's notes: what you wrote and what you committed, for the same day, side by
+side.
+
+```
+╭──────────────────────────────────────────────╮ ╭──────────────────────────────────────────────╮
+│ Tuesday, 28 July 2026               58 words │ │ GIT                                3 commits │
+│ ──────────────────────────────────────────── │ │ ──────────────────────────────────────────── │
+│ 09:12 - Stand-up: taking the logback bump    │ │ stats-service                              2 │
+│ through the last four services.              │ │ │ 676ee18 chore(log): bump the libra…  09:41 │
+│                                              │ │ │ 468a5d8 fix: the classpath           14:02 │
+│ 11:40 - The classpath error was a missing    │ │                                              │
+│ protobuf schema, not the Scala 3 move.       │ │ mailer-service                             1 │
+│                                              │ │ │ 9329a3a feat: migrate the registry   17:20 │
+╰──────────────────────────────────────────────╯ ╰──────────────────────────────────────────────╯
+```
+
+The two share the column evenly, the way the stand-up view splits its own panes.
+On a terminal too narrow for that, the panel moves under the notes rather than
+squeezing the prose — the column keeps its width and gives up height. The stats
+panel on the right stays where it is either way.
+
+It shows that day and no other: moving on the grid re-reads it, and commits are
+timed rather than dated, since the whole panel is one day wide. Walking a hundred
+repositories takes seconds, so it runs in the background — the panel says it is
+reading and the rest of the view never waits for it. Holding an arrow key down
+does not queue a run per day either: one walk at a time, then a catch-up for
+wherever the selection ended up.
+
+Scroll it with the wheel over it, or with `J` `K`; `j` `k` stay on the notes.
+
+It reads through the same [git-standup and `PROJECTS_DIR`](#the-git-half) as the
+stand-up view. Without either, the panel says which one is missing and the rest of
+the calendar is untouched.
 
 `r` switches to the [sprint review](#the-sprint-review) of the period the selected
 day belongs to, and `q` there comes straight back to the month you left — same
@@ -244,6 +289,10 @@ the line above their note instead.
 | `ctrl+c` | quit while typing | `r` | re-read both halves |
 | | | `q` | quit |
 
+The mouse does the same work: click a pane to focus it, click the box to start
+typing and anywhere else to stop, click a footer hint to press the key it names,
+and turn the wheel to scroll whichever pane it sits over.
+
 Typing is a mode, so the shortcuts stay short: `i` opens the box, `enter` writes
 the line into today's entry exactly as `journal "a thought"` would and leaves the
 box open for the next one, `esc` gives the keyboard back. What you typed survives
@@ -273,6 +322,11 @@ PROJECTS_DIR="$HOME/projects"
 by repository. It reads the current branch of every repository under
 `PROJECTS_DIR`, filtered to your own commits — that is git-standup's own default,
 not something this tool decides.
+
+The calendar's [git panel](#what-you-committed-that-day) reads the same directory,
+one day at a time: `git standup -s -A <that day> -B <the next>`, bounded by date
+rather than by a number of days back, so a day in the past carries exactly its own
+commits.
 
 Neither is required. Without the helper, or without `PROJECTS_DIR`, the git pane
 says which one is missing and the journal half works exactly as before. The walk
@@ -325,6 +379,11 @@ mood tag labels the column, so the cards drop it; your other tags stay.
 | `↑` `↓` `^d` `^u` `g` `G` | note | `p` `n` | previous / next period |
 | | | `t` | back to the starting period |
 | | | `q` | quit |
+
+The mouse does the same work: click a card to select it, its column taking the
+focus along, click a footer hint to press the key it names, and turn the wheel to
+scroll whichever column it sits over — reading around a mood without moving what
+is selected.
 
 Paging moves by the window's own length: on the default fortnight, `p` twice
 lands a month back. The period itself is yours to choose:
@@ -399,7 +458,7 @@ Those six keys are all there is.
 | `GIT_BRANCH` | `main` | Used by `git pull` and `git push`. |
 | `EDITOR` | `$EDITOR` | Quote it to pass arguments: `EDITOR="code --wait"`. |
 | `SPRINT_START` | unset | One `YYYY-MM-DD` date. Only `journal review` reads it, and only it fails on a bad value. |
-| `PROJECTS_DIR` | unset | Directory holding your repositories. Only `journal daily` reads it, and it says so in place rather than failing. |
+| `PROJECTS_DIR` | unset | Directory holding your repositories. Read by `journal daily` and by the calendar's `s` panel, which say so in place rather than failing. |
 
 <details>
 <summary><strong>File format details</strong></summary>
@@ -516,8 +575,9 @@ The domain package neither prints nor prompts; every style lives in one
 `ui.Theme`. Two extension points, each a single edit: a **command** implements
 `cli.Command` and joins `cli.Commands()` (help and dispatch follow from the
 list); a **date expression** is one more rule in the `dateparse` table. The
-interactive views are tested by injecting keystrokes into the Bubble Tea
-models, so no terminal is needed.
+interactive views are tested by injecting keystrokes and mouse events into the
+Bubble Tea models, so no terminal is needed — the click targets are rectangles
+computed from the layout, and the tests check them against the rendered view.
 
 Pull requests need exactly one of the `patch` / `minor` / `major` labels — it
 drives the version of the release cut on merge. The pipeline is documented in

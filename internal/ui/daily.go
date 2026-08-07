@@ -98,7 +98,7 @@ type dailyModel struct {
 // notes are captured and entries edited in place rather than handed back.
 func ShowDaily(theme *Theme, source DailySource, days int) error {
 	m := newDailyModel(theme, source, days, TerminalWidth(), TerminalHeight())
-	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }
 
@@ -154,16 +154,16 @@ func (m *dailyModel) reload() {
 // showBothPanes reports whether the terminal fits the journal and the git pane
 // side by side.
 func (m dailyModel) showBothPanes() bool {
-	return m.width >= 2*(minDailyColumnWidth+reviewPaneChrome)+1+2
+	return m.width >= 2*(minDailyColumnWidth+paneChrome)+1+2
 }
 
 // columnWidth is the usable width inside one pane.
 func (m dailyModel) columnWidth() int {
 	width := m.width - 2 // outer margin
 	if m.showBothPanes() {
-		width = (width - 1 - 2*reviewPaneChrome) / 2
+		width = (width - 1 - 2*paneChrome) / 2
 	} else {
-		width -= reviewPaneChrome
+		width -= paneChrome
 	}
 	return max(width, minDailyColumnWidth)
 }
@@ -185,7 +185,7 @@ func (m *dailyModel) layout() {
 	width, height := m.columnWidth(), m.viewHeight()
 	m.notes.Width, m.notes.Height = width, height
 	m.git.Width, m.git.Height = width, height
-	m.input.Width = max(m.width-2-reviewPaneChrome-lipgloss.Width(m.input.Prompt)-1, 12)
+	m.input.Width = max(m.width-2-paneChrome-lipgloss.Width(m.input.Prompt)-1, 12)
 }
 
 // renderPanes re-renders both panes at the current size, keeping the scroll
@@ -226,13 +226,16 @@ func (m dailyModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Saved " + m.source.Today().Format(dateparse.Layout) + ".md"
 		}
 		m.reload()
-		return m, nil
+		return m, mouseAgain
 
 	case tea.KeyMsg:
 		if m.typing {
 			return m.handleTypingKey(msg)
 		}
-		return m.handleKey(msg)
+		return m.apply(msg.String())
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	}
 	return m, nil
 }
@@ -240,30 +243,40 @@ func (m dailyModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleTypingKey drives the capture box. Everything that is not one of its own
 // keys is text, which is why quitting takes ctrl+c here.
 func (m dailyModel) handleTypingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		m.quit = true
-		return m, tea.Quit
-
-	case "esc", "tab":
-		m.stopTyping()
-		return m, nil
-
-	case "enter":
-		m.capture()
-		return m, nil
+	if model, cmd, ok := m.applyTyping(msg.String()); ok {
+		return model, cmd
 	}
-
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
 }
 
-func (m dailyModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// applyTyping performs the capture box's own keys and reports whether the key was
+// one of them. It is named rather than driven by the message so a click on a
+// footer hint can reach the same code; anything it turns down is text for the box.
+func (m dailyModel) applyTyping(key string) (tea.Model, tea.Cmd, bool) {
+	switch key {
+	case "ctrl+c":
+		m.quit = true
+		return m, tea.Quit, true
+
+	case "esc", "tab":
+		m.stopTyping()
+		return m, nil, true
+
+	case "enter":
+		m.capture()
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
+// apply performs the move a key stands for, outside the capture box.
+func (m dailyModel) apply(key string) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.err = nil
 
-	switch msg.String() {
+	switch key {
 	case "q", "esc", "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
@@ -304,12 +317,7 @@ func (m dailyModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // focused is the viewport the keyboard scrolls.
-func (m *dailyModel) focused() *viewport.Model {
-	if m.focus == dailyGitPane {
-		return &m.git
-	}
-	return &m.notes
-}
+func (m *dailyModel) focused() *viewport.Model { return m.pane(m.focus) }
 
 func (m *dailyModel) startTyping() {
 	m.typing = true
@@ -339,6 +347,108 @@ func (m *dailyModel) capture() {
 	m.reload()
 	// The new note is the last one of today, which is at the top of the pane.
 	m.notes.GotoTop()
+}
+
+// --- mouse -------------------------------------------------------------------
+
+// dailyPanesY is the row the panes' top border sits on: the title, the subtitle
+// and a blank line come above them.
+const dailyPanesY = 4
+
+// handleMouse turns a mouse event into the moves the keyboard already makes: a
+// click takes the focus to the pane it lands on, or the keyboard to the capture
+// box, the wheel scrolls the pane it is over, and the footer hints answer to a
+// click as well.
+func (m dailyModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	pane, inPane := m.paneAt(msg.X, msg.Y)
+
+	if delta := wheel(msg); delta != 0 {
+		if inPane {
+			scrollBy(m.pane(pane), delta*wheelLines)
+		}
+		return m, nil
+	}
+	if !leftClick(msg) {
+		return m, nil
+	}
+
+	if key, ok := m.footerHintAt(msg.X, msg.Y); ok {
+		if m.typing {
+			model, cmd, _ := m.applyTyping(key)
+			return model, cmd
+		}
+		return m.apply(key)
+	}
+
+	// Clicking the box is how the mouse asks for the keyboard, and clicking away
+	// from it is how it gives it back.
+	if m.captureRect().contains(msg.X, msg.Y) {
+		m.startTyping()
+		return m, nil
+	}
+	if m.typing {
+		m.stopTyping()
+	}
+	if inPane {
+		m.status, m.err = "", nil
+		m.focus = pane
+	}
+	return m, nil
+}
+
+// paneAt returns the pane the given screen position falls in.
+func (m dailyModel) paneAt(x, y int) (int, bool) {
+	for i := range dailyPaneCount {
+		if m.paneRect(i).contains(x, y) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// paneRect is where a pane sits, its border included. Only the focused pane is on
+// screen when the terminal is too narrow for both, and the other is nowhere.
+func (m dailyModel) paneRect(i int) rect {
+	width := m.columnWidth() + paneChrome
+	x := firstPaneX
+	switch {
+	case m.showBothPanes():
+		x += i * (width + 1)
+	case i != m.focus:
+		return rect{}
+	}
+	return rect{x: x, y: dailyPanesY, w: width, h: m.paneHeight()}
+}
+
+// captureRect is where the capture box sits, its border included.
+func (m dailyModel) captureRect() rect {
+	return rect{
+		x: firstPaneX,
+		y: dailyPanesY + m.paneHeight() + 1, // the blank line under the panes
+		w: max(m.width-2-paneChrome, minDailyColumnWidth) + paneChrome,
+		h: 3, // its border, the input, its border
+	}
+}
+
+// footerHintAt returns the key named by the footer hint under the given screen
+// position. A footer reporting an outcome carries no hints to click.
+func (m dailyModel) footerHintAt(x, y int) (string, bool) {
+	if m.err != nil || m.status != "" {
+		return "", false
+	}
+	capture := m.captureRect()
+	if y != capture.y+capture.h {
+		return "", false
+	}
+	return footerKeyAt(m.footerHints(), x-firstPaneX)
+}
+
+// pane is the viewport of a pane, by index.
+func (m *dailyModel) pane(index int) *viewport.Model {
+	if index == dailyGitPane {
+		return &m.git
+	}
+	return &m.notes
 }
 
 // editToday opens today's entry in the editor, in the foreground.
@@ -462,15 +572,25 @@ func (m dailyModel) renderPane(index int) string {
 func (m dailyModel) gitCount() string {
 	switch {
 	case m.loading:
-		return "reading…"
-	case errors.Is(m.standupErr, standup.ErrNotInstalled):
-		return standup.Binary + " missing"
+		return standupReading
 	case m.standupErr != nil:
-		return "unavailable"
+		return standupTrouble(m.standupErr)
 	}
 	return fmt.Sprintf("%s in %s",
 		plural(m.report.Commits(), "commit", "commits"),
 		plural(len(m.report.Repos), "repo", "repos"))
+}
+
+// standupReading is what a git pane's heading says while the helper runs.
+const standupReading = "reading…"
+
+// standupTrouble labels a missing or failed helper for a pane heading, where there
+// is no room for the whole story. The pane's body carries that.
+func standupTrouble(err error) string {
+	if errors.Is(err, standup.ErrNotInstalled) {
+		return standup.Binary + " missing"
+	}
+	return "unavailable"
 }
 
 // renderNotes lays the journal window out: one heading per day, then its notes.
@@ -594,17 +714,28 @@ func (m dailyModel) renderGit() string {
 	width := m.git.Width
 
 	if m.loading {
-		return m.spin.View() + t.Muted.Render("Reading git activity…")
+		return renderStandupReading(t, m.spin)
 	}
 	if m.standupErr != nil {
-		return m.renderStandupProblem(width)
+		return renderStandupProblem(t, m.standupErr, width)
 	}
 	if m.report.Empty() {
 		return t.Muted.Render("No commit in this window.")
 	}
+	return strings.Join(renderStandupRepos(t, m.report, width), "\n")
+}
 
+// renderStandupReading is what a git pane shows while the helper walks the
+// repositories, which takes seconds rather than milliseconds.
+func renderStandupReading(t *Theme, spin spinner.Model) string {
+	return spin.View() + t.Muted.Render("Reading git activity…")
+}
+
+// renderStandupRepos lays a report out: one heading per repository, then its
+// commits. It is shared by the stand-up view and the calendar's git panel.
+func renderStandupRepos(t *Theme, report standup.Report, width int) []string {
 	var lines []string
-	for i, repo := range m.report.Repos {
+	for i, repo := range report.Repos {
 		if i > 0 {
 			lines = append(lines, "")
 		}
@@ -616,23 +747,24 @@ func (m dailyModel) renderGit() string {
 			lines = append(lines, renderCommit(t, commit, width)...)
 		}
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
-// renderStandupProblem explains why the git pane is empty, and what to do about
-// it. A missing helper is the one case worth a hint of its own.
-func (m dailyModel) renderStandupProblem(width int) string {
-	t := m.theme
+// renderStandupProblem explains why a git pane is empty, and what to do about it.
+// A missing helper is the one case worth a hint of its own.
+func renderStandupProblem(t *Theme, err error, width int) string {
 	body := lipgloss.NewStyle().Width(width)
 
-	if errors.Is(m.standupErr, standup.ErrNotInstalled) {
+	if errors.Is(err, standup.ErrNotInstalled) {
+		// Both lines are wrapped: the calendar's panel is narrow enough that even the
+		// first one does not fit, and a line cut mid-word reads as a bug.
 		return strings.Join([]string{
-			t.Warning.Render(standup.Binary + " is not installed."),
+			body.Render(t.Warning.Render(standup.Binary + " is not installed.")),
 			"",
 			body.Render(t.Muted.Render(standup.InstallHint)),
 		}, "\n")
 	}
-	return body.Render(t.Warning.Render(m.standupErr.Error()))
+	return body.Render(t.Warning.Render(err.Error()))
 }
 
 // renderCommit renders one commit: its hash and subject, with the date pushed to
@@ -660,7 +792,7 @@ func renderCommit(t *Theme, commit standup.Commit, width int) []string {
 // keyboard.
 func (m dailyModel) renderCaptureBox() string {
 	t := m.theme
-	width := m.width - 2 - reviewPaneChrome
+	width := m.width - 2 - paneChrome
 
 	border := t.Palette.Border
 	if m.typing {
@@ -683,17 +815,23 @@ func (m dailyModel) renderFooter() string {
 	case m.status != "":
 		return t.Success.Render("✓ " + m.status)
 	}
+	return t.Keys(m.footerHints()...)
+}
 
+// footerHints is the hint table the footer shows, as it ends up on screen. The
+// clicking is driven off the same list, so a hint that was dropped for want of
+// room cannot be clicked either.
+func (m dailyModel) footerHints() [][2]string {
 	hints := [][2]string{{"i", "type a note"}, {"e", "edit today"}, {"tab", "pane"},
 		{"j k", "scroll"}, {"r", "refresh"}, {"q", "quit"}}
 	if m.typing {
 		hints = [][2]string{{"enter", "add to today"}, {"esc", "stop typing"}, {"ctrl+c", "quit"}}
 	}
 	// Drop the least useful hints rather than let the footer wrap.
-	for len(hints) > 1 && lipgloss.Width(t.Keys(hints...)) > m.width-2 {
+	for len(hints) > 1 && lipgloss.Width(m.theme.Keys(hints...)) > m.width-2 {
 		hints = hints[:len(hints)-1]
 	}
-	return t.Keys(hints...)
+	return hints
 }
 
 // --- static output -----------------------------------------------------------

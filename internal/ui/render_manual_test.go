@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"daily-journal/internal/journal"
 	"daily-journal/internal/standup"
@@ -31,13 +32,23 @@ func TestRenderPreview(t *testing.T) {
 	now := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
 	j := journal.New(dir, func() time.Time { return now })
 
-	cal := calendarModel{theme: Default, source: newFakeSource(j), entry: viewport.New(40, 10), width: 120, height: 32}
+	source := newFakeSource(j)
+	source.dayReports = map[string]standup.Report{now.Format("2006-01-02"): sampleDayReport()}
+
+	cal := newCalendarModel(Default, source, 120, 32)
 	cal.setMonth(journal.MonthOf(now))
 	cal.selectDay(now)
 	if got := cal.View(); got == "" {
 		t.Fatal("calendar rendered nothing")
 	} else {
 		t.Log("\n" + got)
+	}
+
+	// The git panel, beside the notes and then under them.
+	open := openGitPanel(t, cal)
+	for _, width := range []int{160, 120, 70} {
+		model, _ := open.Update(tea.WindowSizeMsg{Width: width, Height: 26})
+		t.Logf("git panel at %d columns\n%s", width, model.(calendarModel).View())
 	}
 }
 
