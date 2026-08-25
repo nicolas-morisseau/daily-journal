@@ -10,6 +10,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"daily-journal/internal/cli"
@@ -37,6 +38,7 @@ var (
 
 func main() {
 	app, err := cli.NewApp(config.OSEnv())
+	fmt.Println(app.Config)
 	if err != nil {
 		ui.NewPrinter().Error(err)
 		os.Exit(exitFailure)

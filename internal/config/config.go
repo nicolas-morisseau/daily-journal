@@ -1,7 +1,3 @@
-// Package config resolves daily-journal's runtime configuration. It reads the
-// very same shell-style file as the original journalot script
-// (`$XDG_CONFIG_HOME/journalot/config`), including the legacy `~/.journalotrc`
-// migration, so this binary can be dropped in place of the script.
 package config
 
 import (
@@ -20,6 +16,7 @@ const (
 	KeyEditor      = "EDITOR"
 	KeySprintStart = "SPRINT_START"
 	KeyProjectsDir = "PROJECTS_DIR"
+	KeyReviewTags  = "REVIEW_TAGS"
 )
 
 // AppName names the config directory under $XDG_CONFIG_HOME.
@@ -28,10 +25,6 @@ const AppName = "daily-journal"
 // DefaultJournalDirName is the directory created under $HOME when JOURNAL_DIR is
 // not set. Set JOURNAL_DIR to put the entries anywhere else.
 const DefaultJournalDirName = "daily-journal"
-
-// LegacyJournalDirName is the default journal directory of earlier versions,
-// still used when it exists and DefaultJournalDirName does not.
-const LegacyJournalDirName = "journalot"
 
 // DefaultGitBranch matches the bash default.
 const DefaultGitBranch = "main"
@@ -61,11 +54,8 @@ type Config struct {
 	// Path is the config file location, whether or not it exists.
 	Path string
 	// Dir is the directory holding Path.
-	Dir string
-	// MigratedFrom is the older config location moved into place during this
-	// run, empty when nothing was migrated. The caller reports it so a rename
-	// never happens silently.
-	MigratedFrom string
+	Dir        string
+	ReviewTags []string
 }
 
 // Env abstracts the process environment so configuration is testable.
@@ -104,17 +94,6 @@ func Paths(env Env) (dir, file string) {
 	return dir, filepath.Join(dir, "config")
 }
 
-// legacyPaths lists the config locations used by earlier versions, newest first.
-// The first one that exists is migrated to the current location.
-func legacyPaths(env Env) []string {
-	return []string{
-		// Before the tool was renamed to daily-journal.
-		filepath.Join(configHome(env), "journalot", "config"),
-		// The original bash script, before XDG.
-		filepath.Join(env.Home, ".journalotrc"),
-	}
-}
-
 // Load resolves the configuration, migrating a legacy config file when needed.
 //
 // Precedence follows the bash script: environment first, then the config file,
@@ -123,21 +102,14 @@ func Load(env Env) (*Config, error) {
 	dir, file := Paths(env)
 
 	cfg := &Config{
-		Dir:          dir,
-		Path:         file,
-		GitBranch:    DefaultGitBranch,
-		Editor:       env.get(KeyEditor),
-		JournalDir:   env.get(KeyJournalDir),
-		ProjectsDir:  env.get(KeyProjectsDir),
-		MigratedFrom: "",
-		Autosync:     false,
+		Dir:         dir,
+		Path:        file,
+		GitBranch:   DefaultGitBranch,
+		Editor:      env.get(KeyEditor),
+		JournalDir:  env.get(KeyJournalDir),
+		ProjectsDir: env.get(KeyProjectsDir),
+		Autosync:    false,
 	}
-
-	migratedFrom, err := migrateLegacy(env, dir, file)
-	if err != nil {
-		return nil, err
-	}
-	cfg.MigratedFrom = migratedFrom
 
 	vars, err := readFile(file, env.get)
 	if err != nil {
@@ -175,6 +147,12 @@ func (c *Config) apply(vars *shellVars) {
 	if v, ok := vars.get(KeyProjectsDir); ok {
 		c.ProjectsDir = v
 	}
+	if v, ok := vars.get(KeyReviewTags); ok {
+		c.ReviewTags = strings.Split(v, ",")
+		for index, value := range c.ReviewTags {
+			c.ReviewTags[index] = strings.TrimSpace(value)
+		}
+	}
 }
 
 func readFile(path string, lookup lookupFunc) (*shellVars, error) {
@@ -189,41 +167,12 @@ func readFile(path string, lookup lookupFunc) (*shellVars, error) {
 	return parseShellVars(f, lookup), nil
 }
 
-// migrateLegacy moves a config file left by an earlier version into the current
-// location, and returns where it came from. An existing current config always
-// wins, so nothing is ever overwritten.
-func migrateLegacy(env Env, dir, file string) (from string, err error) {
-	if _, err := os.Stat(file); err == nil {
-		return "", nil
-	}
-	for _, old := range legacyPaths(env) {
-		if _, err := os.Stat(old); err != nil {
-			continue
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", fmt.Errorf("creating config dir %s: %w", dir, err)
-		}
-		if err := os.Rename(old, file); err != nil {
-			return "", fmt.Errorf("migrating %s to %s: %w", old, file, err)
-		}
-		// Tidy up the directory we just emptied. Remove only succeeds when it
-		// is empty, so anything else living there is left alone.
-		_ = os.Remove(filepath.Dir(old))
-		return old, nil
-	}
-	return "", nil
-}
-
 // defaultJournalDir is ~/daily-journal, falling back to an existing
 // ~/journalot. Nothing is moved.
 func defaultJournalDir(env Env) string {
 	current := filepath.Join(env.Home, DefaultJournalDirName)
 	if _, err := os.Stat(current); err == nil {
 		return current
-	}
-	legacy := filepath.Join(env.Home, LegacyJournalDirName)
-	if info, err := os.Stat(legacy); err == nil && info.IsDir() {
-		return legacy
 	}
 	return current
 }

@@ -1,5 +1,3 @@
-// Package cli wires configuration, the journal domain and the UI together into
-// the `journal` command.
 package cli
 
 import (
@@ -71,9 +69,6 @@ func NewApp(env config.Env) (*App, error) {
 		Printer: printer,
 		Theme:   printer.Theme,
 		Now:     now,
-	}
-	if cfg.MigratedFrom != "" {
-		printer.Warn("Migrated config from %s to %s", cfg.MigratedFrom, cfg.Path)
 	}
 	return app, nil
 }
