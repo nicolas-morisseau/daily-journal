@@ -16,15 +16,20 @@ turned out to be wrong.
 
 ## Setting up
 
-The Go toolchain is all you need — the version is in `go.mod`, nothing else to
-install.
+[mise](https://mise.jdx.dev) installs the toolchain and carries the handful of
+commands used here. It is what CI installs from too, so the versions match.
 
 ```bash
 git clone git@github.com:nicolas-morisseau/daily-journal.git
 cd daily-journal
-go build ./cmd/journal   # produces ./journal
-go test ./...
+mise install             # the Go version in mise.toml, and GoReleaser
+mise run build           # produces ./build/journal, and puts it on PATH
+mise tasks               # everything else that is defined
 ```
+
+mise is a convenience, not a requirement: the project is a plain Go module, and
+`go build ./cmd/journal` works with any Go recent enough for the `go` directive
+in `go.mod`. Only the release tooling really needs it.
 
 Point the binary at a throwaway journal so your real entries stay out of it:
 
@@ -37,8 +42,14 @@ touch `internal/config`.
 
 ## The gate your pull request has to pass
 
-Run this before pushing. CI runs exactly the same three commands, so there is no
-second, hidden standard:
+Run this before pushing. CI runs this exact task — `pull-request.yml` installs
+mise and calls it — so there is no second, hidden standard:
+
+```bash
+mise run check           # go vet, gofmt, go test
+```
+
+Without mise, the three commands it wraps:
 
 ```bash
 go vet ./...

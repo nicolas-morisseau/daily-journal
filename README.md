@@ -7,7 +7,7 @@ One markdown file per day, in a git repository you own.
 
 [![Release](https://img.shields.io/github/v/release/nicolas-morisseau/daily-journal)](https://github.com/nicolas-morisseau/daily-journal/releases/latest)
 [![CI](https://github.com/nicolas-morisseau/daily-journal/actions/workflows/pull-request.yml/badge.svg)](https://github.com/nicolas-morisseau/daily-journal/actions/workflows/pull-request.yml)
-[![Go](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
+[![Go](https://img.shields.io/badge/go-1.27+-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 </div>
@@ -71,6 +71,9 @@ sync — because the journal *is* a git repository.
   `2025-01-15`. Same grammar on macOS and Linux.
 - **Git built in** — pulls before you write, offers to commit and push after
   (or does it silently with `AUTOSYNC=true`).
+- **Several journals** — `journal new reading` starts a second one and switches
+  to it; every command follows until `journal use` says otherwise. One git
+  repository covers them all.
 - **Plain files** — one `YYYY-MM-DD.md` per day in a directory you choose.
   No lock-in; leaving means keeping your files.
 
@@ -115,7 +118,7 @@ on GitHub for every release.
 
 ### From source
 
-Requires Go 1.26 or newer:
+Requires Go 1.27 or newer:
 
 ```bash
 git clone https://github.com/nicolas-morisseau/daily-journal
@@ -145,6 +148,10 @@ Usage: journal [COMMAND] [OPTIONS]
 | `journal calendar [YYYY-MM]` | Full-screen month view: read and edit entries |
 | `journal daily [--days N]` | Stand-up view: the last day's notes and git commits |
 | `journal review [--weeks N] [--from DATE] [--to DATE]` | Sprint review: `#good`, `#bad` and `#mad` side by side |
+| `journal journals` | List your journals and show the active one |
+| `journal new NAME` | Create a journal and make it the active one |
+| `journal use NAME` | Switch the active journal |
+| `journal -j NAME ...` | Run one command in another journal |
 | `journal version` | Print the version of this build |
 | `journal help [COMMAND]` | Usage for the tool or for one command |
 
@@ -430,8 +437,11 @@ Everything works with no configuration at all. To change something, create
 `~/.config/daily-journal/config`:
 
 ```bash
-# Where the journal lives. Default: ~/daily-journal
+# Where the journals live, one directory each. Default: ~/daily-journal
 JOURNAL_DIR="$HOME/journal"
+
+# Journal used until `journal use` says otherwise. Default: default
+DEFAULT_JOURNAL=perso
 
 # Commit and push on save without asking. Default: off
 AUTOSYNC=true
@@ -449,11 +459,12 @@ SPRINT_START=2026-07-06
 PROJECTS_DIR="$HOME/projects"
 ```
 
-Those six keys are all there is.
+Those seven keys are all there is.
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `JOURNAL_DIR` | `~/daily-journal` | `~` and `$HOME` are expanded. Created on first write. |
+| `JOURNAL_DIR` | `~/daily-journal` | `~` and `$HOME` are expanded. Created on first write. Holds every journal. |
+| `DEFAULT_JOURNAL` | `default` | The journal used when `journal use` has never run. |
 | `AUTOSYNC` | off | Only the exact string `true` enables it — `1` and `yes` do not. |
 | `GIT_BRANCH` | `main` | Used by `git pull` and `git push`. |
 | `EDITOR` | `$EDITOR` | Quote it to pass arguments: `EDITOR="code --wait"`. |
@@ -480,9 +491,10 @@ would expect from the days when it was `source`d:
 
 `JOURNAL_DIR`, `PROJECTS_DIR` and `EDITOR` are also read from the environment, and
 `XDG_CONFIG_HOME` moves the config directory. The config file wins over the
-environment.
+environment. `JOURNAL` is read from the environment only, and selects a journal
+for the commands that follow it.
 
-The file is never written by the tool. It is not created on first run, and
+The config file is never written by the tool. It is not created on first run, and
 `journal help` prints its path whether or not it exists. The one exception is
 migration: a config left by an earlier version (`~/.config/journalot/config`,
 then `~/.journalotrc`) is moved into place on first run, and the move is
@@ -490,31 +502,63 @@ reported. An existing `~/.config/daily-journal/config` always wins.
 
 </details>
 
-### Entry template
+## Several journals
 
-Drop a `template.md` in the journal directory and new entries start from it
-instead of a bare date heading:
+One journal is the default and nothing forces you past it. When you want a
+second one — a reading log, a side project, notes that have nothing to do with
+work — create it and you are in it:
 
-```markdown
-# {{date}} — {{day_of_week}} (week {{week_number}})
-
-Started at {{time}}
-
-## Notes
+```bash
+journal new reading        # created, and now the active one
+journal "Finished Dune"    # lands in reading
+journal journals           # what you have, and where you are
+journal use default        # back
 ```
 
-`{{date}}` is the entry's date; the other placeholders describe the moment of
-creation.
+`journal use` is not a mode you have to remember to leave: it is written down,
+and every later command in every terminal follows it until you switch again. It
+is recorded in `~/.local/state/daily-journal/active` (`$XDG_STATE_HOME` moves
+it), outside the journal, so it never syncs to another machine.
+
+For one command in another journal, without switching:
+
+```bash
+journal -j reading "Started The Dispossessed"
+alias rj='journal -j reading'
+```
+
+Resolution order, most immediate last: `DEFAULT_JOURNAL` from the config file,
+then what `journal use` recorded, then `$JOURNAL` from the environment, then
+`--journal` (`-j`) on the command line. `journal help` prints which one won.
+
+A journal name is a directory name — letters, digits, `.`, `-` and `_`. Writing
+in a journal that does not exist is refused rather than creating one silently,
+so a typo tells you instead of scattering entries:
+
+```
+$ journal -j readng "Finished Dune"
+no journal named "readng" (selected by --journal)
+
+Create it with:
+  journal new readng
+```
 
 ## How your data is stored
 
 ```
 ~/daily-journal/             default location; JOURNAL_DIR overrides it
-├── entries/
-│   ├── 2026-07-28.md        one file per day
-│   └── 2026-07-27.md
-└── template.md              optional
+├── .git/                    one repository, covering every journal
+├── default/                 a journal
+│   └── entries/
+│       ├── 2026-07-28.md    one file per day
+│       └── 2026-07-27.md
+└── reading/                 another one, from `journal new reading`
+    └── entries/
+        └── 2026-07-28.md
 ```
+
+A directory of the root is a journal when it holds an `entries/` directory.
+Anything else living there — a `README`, an `assets/` folder — is ignored.
 
 The journal is a git repository, and that is what covers history, backup and
 sync — there is no export and no backup command, on purpose:
@@ -534,6 +578,12 @@ actually changed the file.
 A journal left in `~/journalot` by an earlier version keeps being used as long
 as `~/daily-journal` does not exist, so nothing has to be moved. Rename it, or
 set `JOURNAL_DIR`, whenever you prefer.
+
+Versions before multiple journals kept entries directly under `JOURNAL_DIR`.
+They are moved to `<JOURNAL_DIR>/default/entries/` on the first run that finds
+them, and the move is reported — git follows the rename, and `git log` keeps
+every entry's history. If a `default/` directory is already there, nothing is
+moved and the tool says so rather than merging two journals.
 
 ## Exit status
 

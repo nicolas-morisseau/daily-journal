@@ -24,6 +24,11 @@ on:
 permissions:
   contents: write
 
+# See pull-request.yml: the second attestation GitHub attaches to a release
+# asset is one the aqua registry does not recognise.
+env:
+  MISE_AQUA_GITHUB_ATTESTATIONS: "false"
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -47,19 +52,32 @@ jobs:
           # GoReleaser reads the whole log for the changelog.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v7
+      # Installs both Go and GoReleaser at the versions in mise.toml — the same
+      # ones `mise run snapshot` rehearses the release with locally.
+      - uses: jdx/mise-action@v4
+
+      # See pull-request.yml: mise caches tools, not the caches `go` writes.
+      - name: Locate the Go caches
+        id: go-cache
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
         with:
-          go-version-file: go.mod
+          path: |
+            ${{ steps.go-cache.outputs.build }}
+            ${{ steps.go-cache.outputs.mod }}
+          key: go-release-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-release-${{ runner.os }}-
 
       # go test runs inside GoReleaser's before hooks; gofmt does not, and a
       # release is the last place to discover a formatting slip.
       - name: Check formatting
-        run: test -z "$(gofmt -l .)" || { gofmt -l .; false; }
+        run: mise run fmt:check
 
-      - uses: goreleaser/goreleaser-action@v7
-        with:
-          version: "~> v2"
-          args: release --clean
+      - name: Build and publish
+        run: mise run release
         env:
           # Publishes the release here.
           GITHUB_TOKEN: ${{ github.token }}

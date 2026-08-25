@@ -176,6 +176,7 @@ func (versionCommand) Name() string    { return "version" }
 func (versionCommand) Usage() string   { return "version" }
 func (versionCommand) Summary() string { return "Print the version of this build" }
 func (versionCommand) Flags() []Flag   { return nil }
+func (versionCommand) AcrossJournals() {}
 
 func (versionCommand) Run(a *App, _ FlagValues, operands []string) error {
 	if err := noOperands("version", operands); err != nil {
@@ -192,6 +193,7 @@ func (helpCommand) Name() string    { return "help" }
 func (helpCommand) Usage() string   { return "help [COMMAND]" }
 func (helpCommand) Summary() string { return "Show help for the tool or for one command" }
 func (helpCommand) Flags() []Flag   { return nil }
+func (helpCommand) AcrossJournals() {}
 
 func (helpCommand) Run(a *App, _ FlagValues, operands []string) error {
 	switch len(operands) {

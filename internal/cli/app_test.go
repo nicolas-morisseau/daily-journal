@@ -20,6 +20,7 @@ import (
 type harness struct {
 	t      *testing.T
 	home   string
+	env    config.Env
 	app    *App
 	stdout *bytes.Buffer
 	stderr *bytes.Buffer
@@ -30,6 +31,7 @@ type harness struct {
 // untouched.
 func newHarness(t *testing.T, editorScript string, configLines ...string) *harness {
 	t.Helper()
+	unsignCommits(t)
 	home := t.TempDir()
 
 	editorPath := filepath.Join(home, "fake-editor")
@@ -65,12 +67,31 @@ func newHarness(t *testing.T, editorScript string, configLines ...string) *harne
 		t.Fatal(err)
 	}
 
-	h := &harness{t: t, home: home, app: app, stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+	h := &harness{t: t, home: home, env: env, app: app, stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
 	app.Now = func() time.Time { return time.Date(2026, 7, 28, 14, 30, 0, 0, time.UTC) }
-	app.Journal = journal.New(app.Config.JournalDir, app.Now)
+	// Rebuild the journal on the frozen clock, keeping the directory NewApp
+	// resolved so that the tests go through the real journal selection.
+	app.Journal = journal.New(app.Journal.Dir, app.Now)
 	app.Printer = &ui.Printer{Out: h.stdout, Err: h.stderr, In: strings.NewReader(""), Theme: ui.Default}
 	app.Theme = ui.Default
 	return h
+}
+
+// unsignCommits turns commit signing off for every git command this test
+// process runs.
+//
+// The tests inherit the real environment, so a developer with
+// `commit.gpgsign = true` in ~/.gitconfig would have every test commit ask a
+// pinentry for a passphrase — and block for as long as the test timeout when
+// there is no terminal to ask on. GIT_CONFIG_* layers over the config files
+// without replacing them, so the identity in ~/.gitconfig still applies.
+func unsignCommits(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_COUNT", "2")
+	t.Setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
+	t.Setenv("GIT_CONFIG_VALUE_0", "false")
+	t.Setenv("GIT_CONFIG_KEY_1", "tag.gpgsign")
+	t.Setenv("GIT_CONFIG_VALUE_1", "false")
 }
 
 // run executes the CLI with the given arguments.
@@ -97,7 +118,10 @@ func (h *harness) entry(slug string) string {
 	return string(b)
 }
 
-// initGit turns the journal directory into a committed git repository.
+// rootDir is the journals root, which is where the git repository lives.
+func (h *harness) rootDir() string { return h.app.Config.JournalsRoot }
+
+// initGit turns the journals root into a committed git repository.
 func (h *harness) initGit() {
 	h.t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -113,7 +137,7 @@ func (h *harness) initGit() {
 		{"commit", "-q", "--allow-empty", "-m", "init"},
 	} {
 		cmd := exec.Command("git", args...)
-		cmd.Dir = h.journalDir()
+		cmd.Dir = h.rootDir()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			h.t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
@@ -124,7 +148,7 @@ func (h *harness) initGit() {
 func (h *harness) gitLog() string {
 	h.t.Helper()
 	cmd := exec.Command("git", "log", "--format=%s")
-	cmd.Dir = h.journalDir()
+	cmd.Dir = h.rootDir()
 	out, err := cmd.Output()
 	if err != nil {
 		h.t.Fatalf("git log: %v", err)
@@ -356,7 +380,7 @@ func TestOpenUsesConfiguredJournalDir(t *testing.T) {
 	if err := h.run(); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(h.home, "notes")
+	want := filepath.Join(h.home, "notes", config.DefaultJournalName)
 	if h.journalDir() != want {
 		t.Errorf("journal dir = %q, want %q", h.journalDir(), want)
 	}

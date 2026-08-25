@@ -23,13 +23,17 @@ var examples = [][2]string{
 	{`journal review --weeks 3`, "Any window length"},
 	{`journal search roadmap`, "Full-text search"},
 	{`journal search --tag work --tag bad`, "Narrow it to tagged entries"},
+	{`journal new reading`, "Start a second journal and switch to it"},
+	{`journal use default`, "Switch back; every command follows"},
+	{`journal -j reading "Finished Dune"`, "One command in another journal"},
 }
 
 // configRows documents the keys read from the config file.
 var configRows = [][2]string{
 	{"AUTOSYNC=true", "Commit and push without asking"},
+	{"DEFAULT_JOURNAL=default", "Journal used until 'journal use' says otherwise"},
 	{"GIT_BRANCH=main", "Branch used for pull and push"},
-	{`JOURNAL_DIR="$HOME/journal"`, "Where the journal lives"},
+	{`JOURNAL_DIR="$HOME/journal"`, "Where the journals live, one directory each"},
 	{`PROJECTS_DIR="$HOME/projects"`, "Repositories 'journal daily' reads git activity from"},
 	{"SPRINT_START=2026-07-06", "First day of a sprint, for 'journal review'"},
 }
@@ -124,10 +128,13 @@ func (a *App) showConfiguration() {
 	p, t := a.Printer, a.Theme
 
 	p.Println("  " + t.Accent.Render("CONFIGURATION"))
-	p.Field("Journal directory", a.Journal.Dir, 18)
-	p.Field("Config file", a.Config.Path, 18)
-	p.Field("Editor", editorLabel(a.Config.Editor), 18)
-	p.Field("Projects directory", projectsLabel(a.Config.ProjectsDir), 18)
+	p.Field("Active journal", activeLabel(a.Config), 19)
+	p.Field("Journal directory", a.Journal.Dir, 19)
+	p.Field("Journals root", a.Config.JournalsRoot, 19)
+	p.Field("Config file", a.Config.Path, 19)
+	p.Field("Active journal file", a.Config.StatePath, 19)
+	p.Field("Editor", editorLabel(a.Config.Editor), 19)
+	p.Field("Projects directory", projectsLabel(a.Config.ProjectsDir), 19)
 	p.Blank()
 
 	width := 0
@@ -142,9 +149,18 @@ func (a *App) showConfiguration() {
 		p.Println("      " + t.Value.Render(row[0]) + pad + "   " + t.Muted.Render(row[1]))
 	}
 	p.Blank()
-	p.Println("  " + t.Muted.Render("Entry template: ") + t.Value.Render(a.Journal.TemplatePath()) +
-		t.Muted.Render("  ({{date}}, {{day_of_week}}, {{week_number}}, {{time}})"))
+	p.Println("  " + t.Muted.Render("Every journal shares one git repository, at the journals root."))
 	p.Blank()
+}
+
+// activeLabel names the active journal and what selected it, which is the first
+// thing to check when a command works on the wrong journal. Nothing having
+// selected it is not worth a mention: that is the ordinary case.
+func activeLabel(cfg *config.Config) string {
+	if cfg.ActiveFrom == config.FromDefault {
+		return cfg.ActiveJournal
+	}
+	return cfg.ActiveJournal + " (from " + cfg.ActiveFrom.String() + ")"
 }
 
 func editorLabel(configured string) string {

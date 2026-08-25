@@ -1,0 +1,78 @@
+# Local toolchain and the handful of commands used while working on the project.
+#
+#   mise install       get the toolchain
+#   mise tasks         list what follows
+#   mise run check     the same gate CI runs
+
+[tools]
+# This is the version CI installs too — the workflows use jdx/mise-action, which
+# reads this file, so there is no second place to bump. The `go` directive in
+# go.mod is a minimum rather than a pin; keep it at or below this.
+go = "1.27.0"
+# Used by `mise run snapshot` locally and by `mise run release` in CI, so
+# neither depends on what happens to be on the machine. "2" tracks the latest
+# 2.x, which is what the release workflow used to ask goreleaser-action for.
+goreleaser = "2"
+
+[env]
+# `mise run build` drops the binary here, so `journal` is on PATH afterwards
+# without installing anything into the Go bin directory.
+_.path = ["{{config_root}}/build"]
+
+[tasks.build]
+description = "Build ./build/journal"
+run = "go build -o build/journal ./cmd/journal"
+sources = ["cmd/**/*.go", "internal/**/*.go", "go.mod", "go.sum"]
+outputs = ["build/journal"]
+
+[tasks.run]
+description = "Run the command without building — mise run run -- today"
+run = "go run ./cmd/journal"
+
+[tasks.dev]
+description = "Same, against a throwaway journal under build/sandbox"
+# Keeps real entries and the real config file out of whatever is being tried
+# out; see CONTRIBUTING.md.
+env = { JOURNAL_DIR = "{{config_root}}/build/sandbox/journal", XDG_CONFIG_HOME = "{{config_root}}/build/sandbox/config", XDG_STATE_HOME = "{{config_root}}/build/sandbox/state" }
+run = "go run ./cmd/journal"
+
+[tasks.install]
+description = "Install journal into the Go bin directory"
+run = "go install ./cmd/journal"
+
+[tasks.test]
+description = "Run the tests"
+run = "go test ./..."
+
+[tasks.vet]
+description = "go vet"
+run = "go vet ./..."
+
+[tasks.fmt]
+description = "Format the code"
+run = "gofmt -w ."
+
+[tasks."fmt:check"]
+description = "Fail if anything is unformatted"
+run = "test -z \"$(gofmt -l .)\" || { gofmt -l .; false; }"
+
+[tasks.check]
+description = "The pull request gate: vet, formatting, tests"
+depends = ["vet", "fmt:check", "test"]
+
+[tasks.tidy]
+description = "go mod tidy"
+run = "go mod tidy"
+
+[tasks.snapshot]
+description = "Build a full release locally, publish nothing"
+# --snapshot already implies --skip=publish, but the formula is still rendered
+# into dist/, and rendering it needs the tap's deploy key in the environment.
+# Skipping the pipe outright is what makes this runnable without any secret.
+run = "goreleaser release --snapshot --clean --skip=homebrew"
+
+[tasks.release]
+description = "Build and publish a release — what CI runs on a tag"
+# Wants GITHUB_TOKEN and HOMEBREW_TAP_SSH_KEY in the environment, and a clean
+# checkout of the tag being released. Use `mise run snapshot` to rehearse.
+run = "goreleaser release --clean"

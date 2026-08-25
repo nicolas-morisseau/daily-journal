@@ -43,8 +43,10 @@ release candidates are ever wanted — `.goreleaser.yaml` already sets
 
 ## What a release does
 
-`release.yml` hands over to [GoReleaser](https://goreleaser.com)
-(`.goreleaser.yaml`), which:
+`release.yml` installs Go and GoReleaser through mise — the versions in
+`mise.toml`, the same ones a snapshot uses locally — then runs `mise run
+release`, which hands over to [GoReleaser](https://goreleaser.com)
+(`.goreleaser.yaml`):
 
 1. runs the tests again in its `before` hooks,
 2. builds `journal` for macOS and Linux, amd64 and arm64, with the version baked
@@ -137,9 +139,14 @@ formula push, leaving the tap one version behind.
 ## Checking the pipeline without publishing
 
 ```bash
+mise run snapshot                       # build everything into dist/, publish nothing
 goreleaser check                        # validate .goreleaser.yaml
-goreleaser release --snapshot --clean   # build everything into dist/, publish nothing
 ```
+
+`snapshot` and the release itself run the same GoReleaser, installed by mise at
+the version in `mise.toml`, so a rehearsal is a genuine one. The one part it
+leaves out is the formula: rendering it needs the tap's deploy key, so the task
+skips that pipe and a snapshot never tells you whether the tap push works.
 
 `goreleaser check` currently exits non-zero: `brews` is deprecated in favour of
 `homebrew_casks`, which is exactly what this project cannot use. The message to
@@ -147,8 +154,8 @@ look for is "configuration is valid, but uses deprecated properties" — anythin
 else is a real problem. `goreleaser release` is unaffected and only warns, which
 is why the release workflow does not run `check`. GoReleaser removes deprecated
 options on major versions only, so this holds for the whole of v2;
-`release.yml` pins `~> v2`. At v3 the choice is to notarise the binaries with a
-paid Developer ID, or to generate the formula here instead.
+`mise.toml` pins `goreleaser = "2"`. At v3 the choice is to notarise the
+binaries with a paid Developer ID, or to generate the formula here instead.
 
 ```bash
 # what a label would produce, against the tags you have

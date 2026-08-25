@@ -48,8 +48,8 @@ func TestLoadDefaults(t *testing.T) {
 	}
 
 	want := filepath.Join(env.Home, "daily-journal")
-	if cfg.JournalDir != want {
-		t.Errorf("JournalDir = %q, want %q", cfg.JournalDir, want)
+	if cfg.JournalsRoot != want {
+		t.Errorf("JournalsRoot = %q, want %q", cfg.JournalsRoot, want)
 	}
 	if cfg.GitBranch != DefaultGitBranch {
 		t.Errorf("GitBranch = %q, want %q", cfg.GitBranch, DefaultGitBranch)
@@ -70,8 +70,8 @@ func TestLoadKeepsAnExistingLegacyJournalDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.JournalDir != legacy {
-		t.Errorf("JournalDir = %q, want %q", cfg.JournalDir, legacy)
+	if cfg.JournalsRoot != legacy {
+		t.Errorf("JournalsRoot = %q, want %q", cfg.JournalsRoot, legacy)
 	}
 }
 
@@ -87,8 +87,8 @@ func TestLoadPrefersTheCurrentJournalDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(env.Home, "daily-journal"); cfg.JournalDir != want {
-		t.Errorf("JournalDir = %q, want %q", cfg.JournalDir, want)
+	if want := filepath.Join(env.Home, "daily-journal"); cfg.JournalsRoot != want {
+		t.Errorf("JournalsRoot = %q, want %q", cfg.JournalsRoot, want)
 	}
 }
 
@@ -105,8 +105,8 @@ EDITOR=hx
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(env.Home, "my journal"); cfg.JournalDir != want {
-		t.Errorf("JournalDir = %q, want %q", cfg.JournalDir, want)
+	if want := filepath.Join(env.Home, "my journal"); cfg.JournalsRoot != want {
+		t.Errorf("JournalsRoot = %q, want %q", cfg.JournalsRoot, want)
 	}
 	if !cfg.Autosync {
 		t.Error("AUTOSYNC=true should enable Autosync")
@@ -196,8 +196,8 @@ AUTOSYNC=true
 		t.Fatal(err)
 	}
 	// ACTIVE_JOURNAL must not redirect the journal anywhere any more.
-	if want := filepath.Join(env.Home, "daily-journal"); cfg.JournalDir != want {
-		t.Errorf("JournalDir = %q, want %q", cfg.JournalDir, want)
+	if want := filepath.Join(env.Home, "daily-journal"); cfg.JournalsRoot != want {
+		t.Errorf("JournalsRoot = %q, want %q", cfg.JournalsRoot, want)
 	}
 	if !cfg.Autosync {
 		t.Error("the keys that still exist should still apply")
@@ -214,8 +214,8 @@ func TestConfigFileWinsOverEnvironment(t *testing.T) {
 	}
 	// The shell version sources the config after applying env defaults, so the
 	// file wins. Keep that order.
-	if cfg.JournalDir != "/from/file" {
-		t.Errorf("JournalDir = %q, want /from/file", cfg.JournalDir)
+	if cfg.JournalsRoot != "/from/file" {
+		t.Errorf("JournalsRoot = %q, want /from/file", cfg.JournalsRoot)
 	}
 }
 
@@ -225,8 +225,8 @@ func TestEnvironmentUsedWithoutConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.JournalDir != "/from/env" {
-		t.Errorf("JournalDir = %q, want /from/env", cfg.JournalDir)
+	if cfg.JournalsRoot != "/from/env" {
+		t.Errorf("JournalsRoot = %q, want /from/env", cfg.JournalsRoot)
 	}
 }
 
@@ -238,8 +238,8 @@ func TestTildeExpanded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(env.Home, "notes"); cfg.JournalDir != want {
-		t.Errorf("JournalDir = %q, want %q", cfg.JournalDir, want)
+	if want := filepath.Join(env.Home, "notes"); cfg.JournalsRoot != want {
+		t.Errorf("JournalsRoot = %q, want %q", cfg.JournalsRoot, want)
 	}
 }
 
@@ -298,8 +298,8 @@ func TestMigrationFromRenamedConfigDir(t *testing.T) {
 	if !cfg.Autosync {
 		t.Error("AUTOSYNC did not survive the migration")
 	}
-	if want := filepath.Join(env.Home, "journal"); cfg.JournalDir != want {
-		t.Errorf("JournalDir = %q, want %q", cfg.JournalDir, want)
+	if want := filepath.Join(env.Home, "journal"); cfg.JournalsRoot != want {
+		t.Errorf("JournalsRoot = %q, want %q", cfg.JournalsRoot, want)
 	}
 	if content := readFileString(t, cfg.Path); !strings.Contains(content, "AUTOSYNC=true") {
 		t.Errorf("migrated file = %q", content)

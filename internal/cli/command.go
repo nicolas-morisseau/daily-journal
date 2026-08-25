@@ -3,6 +3,8 @@ package cli
 import (
 	"errors"
 	"strings"
+
+	"daily-journal/internal/config"
 )
 
 // Command is one subcommand of the CLI. Adding a feature means adding a Command
@@ -28,6 +30,15 @@ type freeTextCommand interface {
 	FreeText()
 }
 
+// rootCommand is implemented by commands that work on the set of journals, or
+// on nothing at all. They run even when the active journal does not exist,
+// which is what lets `journal new` be the way out of that situation.
+type rootCommand interface {
+	Command
+	// AcrossJournals distinguishes the interface; it does nothing.
+	AcrossJournals()
+}
+
 // Commands is the full command set, in the order the help screen lists them.
 func Commands() []Command {
 	return []Command{
@@ -38,6 +49,9 @@ func Commands() []Command {
 		calendarCommand{},
 		dailyCommand{},
 		reviewCommand{},
+		journalsCommand{},
+		newCommand{},
+		useCommand{},
 		versionCommand{},
 		helpCommand{},
 	}
@@ -64,6 +78,7 @@ func Lookup(name string) (Command, bool) {
 //
 // Resolution order, which is what lets quick capture coexist with subcommands:
 //
+//  0. --journal NAME          -> selects the journal, then drops out of argv
 //  1. no arguments            -> open today's entry
 //  2. -h / --help             -> the help screen
 //  3. an exact command name   -> that command
@@ -74,6 +89,16 @@ func Lookup(name string) (Command, bool) {
 // Step 3 matches the whole argument, so quoted multi-word text can never be
 // mistaken for a command: "list of things to buy" is not equal to "list".
 func (a *App) Run(argv []string) error {
+	argv, selected, err := extractJournalFlag(argv)
+	if err != nil {
+		return err
+	}
+	if selected != "" {
+		if err := a.setJournal(selected, config.FromFlag); err != nil {
+			return err
+		}
+	}
+
 	if len(argv) == 0 {
 		return a.exec(DefaultCommand(), nil)
 	}
@@ -100,6 +125,59 @@ func (a *App) Run(argv []string) error {
 	return a.exec(CaptureCommand(), argv)
 }
 
+// journalFlag is the global option selecting a journal for one invocation. It
+// is not declared on any command: it is recognised before dispatch so that it
+// works in front of a subcommand and in front of a quick capture alike.
+const (
+	journalFlagLong  = "--journal"
+	journalFlagShort = "-j"
+)
+
+// extractJournalFlag pulls the global --journal option out of argv and returns
+// what is left.
+//
+// It stops at `--`, so `journal -- -j` still captures the literal text. It
+// accepts the same shapes as the per-command parser: `-j NAME`, `-jNAME`,
+// `-j=NAME`, `--journal NAME` and `--journal=NAME`.
+func extractJournalFlag(argv []string) (rest []string, name string, err error) {
+	rest = make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "--" {
+			rest = append(rest, argv[i:]...)
+			return rest, name, nil
+		}
+
+		var value string
+		var hasValue bool
+		switch {
+		case arg == journalFlagLong || arg == journalFlagShort:
+		case strings.HasPrefix(arg, journalFlagLong+"="):
+			value, hasValue = strings.TrimPrefix(arg, journalFlagLong+"="), true
+		case strings.HasPrefix(arg, journalFlagShort+"="):
+			value, hasValue = strings.TrimPrefix(arg, journalFlagShort+"="), true
+		case strings.HasPrefix(arg, journalFlagShort) && len(arg) > 2:
+			value, hasValue = arg[2:], true
+		default:
+			rest = append(rest, arg)
+			continue
+		}
+
+		if !hasValue {
+			if i+1 >= len(argv) {
+				return nil, "", usagef("option %s requires a journal name", arg)
+			}
+			value = argv[i+1]
+			i++
+		}
+		if value == "" {
+			return nil, "", usagef("option %s requires a journal name", arg)
+		}
+		name = value
+	}
+	return rest, name, nil
+}
+
 // exec parses a command's arguments and runs it.
 func (a *App) exec(cmd Command, args []string) error {
 	mode := parseAnywhere
@@ -117,6 +195,11 @@ func (a *App) exec(cmd Command, args []string) error {
 	flags, operands, err := parseFlags(cmd.Flags(), args, mode)
 	if err != nil {
 		return withUsageHint(cmd, err)
+	}
+	if _, acrossJournals := cmd.(rootCommand); !acrossJournals {
+		if err := a.requireJournal(); err != nil {
+			return err
+		}
 	}
 	return cmd.Run(a, flags, operands)
 }

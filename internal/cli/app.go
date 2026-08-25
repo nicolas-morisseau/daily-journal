@@ -5,6 +5,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -67,7 +68,7 @@ func NewApp(env config.Env) (*App, error) {
 
 	app := &App{
 		Config:  cfg,
-		Journal: journal.New(cfg.JournalDir, now),
+		Journal: journal.New(journal.DirFor(cfg.JournalsRoot, cfg.ActiveJournal), now),
 		Printer: printer,
 		Theme:   printer.Theme,
 		Now:     now,
@@ -75,12 +76,63 @@ func NewApp(env config.Env) (*App, error) {
 	if cfg.MigratedFrom != "" {
 		printer.Warn("Migrated config from %s to %s", cfg.MigratedFrom, cfg.Path)
 	}
+	if err := app.migrateRootJournal(); err != nil {
+		return nil, err
+	}
 	return app, nil
 }
 
-// repo returns a git handle on the journal.
+// migrateRootJournal moves the single journal of earlier versions into a named
+// journal of its own, so every journal has the same shape.
+//
+// Earlier versions kept entries directly under JOURNAL_DIR; journals now live
+// one directory down. The move happens once, and is always reported: entries
+// are the user's files and they do not change place silently.
+func (a *App) migrateRootJournal() error {
+	migration, err := journal.MigrateRootEntries(a.Config.JournalsRoot, a.Config.DefaultJournal)
+	if err != nil {
+		return err
+	}
+	switch {
+	case migration.Moved():
+		a.Printer.Warn("Moved %s to %s", migration.From, migration.To)
+		a.Printer.Muted("Your journal is now one of several; run 'journal journals' to see them.")
+	case migration.Skipped:
+		a.Printer.Warn("%s is still there, but %s already exists, so nothing was moved.",
+			migration.From, filepath.Dir(migration.To))
+		a.Printer.Muted("Merge the two directories by hand, or move %s under a name of its own.", migration.From)
+	}
+	return nil
+}
+
+// setJournal points the application at another journal.
+func (a *App) setJournal(name string, from config.ActiveSource) error {
+	if err := journal.ValidateName(name); err != nil {
+		return usagef("%s", err.Error())
+	}
+	a.Config.ActiveJournal, a.Config.ActiveFrom = name, from
+	a.Journal = journal.New(journal.DirFor(a.Config.JournalsRoot, name), a.Now)
+	return nil
+}
+
+// requireJournal rejects a command that would work inside a journal that does
+// not exist, rather than letting it create one on the way past.
+//
+// The default journal is exempt: a first run has to be able to create it, which
+// is what makes `journal` work on a fresh install with no setup at all.
+func (a *App) requireJournal() error {
+	name := a.Config.ActiveJournal
+	if name == a.Config.DefaultJournal || journal.HasJournal(a.Config.JournalsRoot, name) {
+		return nil
+	}
+	return fmt.Errorf("no journal named %q (selected by %s)\n\nCreate it with:\n  journal new %s\n\nOr list the journals you have:\n  journal journals",
+		name, a.Config.ActiveFrom, name)
+}
+
+// repo returns a git handle on the journals root, which is the repository every
+// journal shares.
 func (a *App) repo() *gitrepo.Repo {
-	return gitrepo.New(a.Journal.Dir, a.Config.GitBranch)
+	return gitrepo.New(a.Config.JournalsRoot, a.Config.GitBranch)
 }
 
 // resolveEditor picks the editor to launch.

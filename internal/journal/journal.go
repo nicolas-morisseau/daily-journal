@@ -20,20 +20,16 @@ import (
 	"daily-journal/internal/dateparse"
 )
 
-// Directory names inside a journal.
-const (
-	EntriesDirName = "entries"
-	// TemplateFileName is the optional per-journal entry template.
-	TemplateFileName = "template.md"
-)
+// EntriesDirName is the directory holding a journal's entry files.
+const EntriesDirName = "entries"
 
 // ErrNoEntriesDir is returned when a journal has no entries directory yet.
 var ErrNoEntriesDir = errors.New("no entries directory")
 
 // Journal is the journal rooted at Dir.
 type Journal struct {
-	// Dir is the journal root, which holds entries/ and the optional
-	// template.md.
+	// Dir is the journal's own directory, which holds entries/. It is one
+	// subdirectory of the journals root, not the root itself.
 	Dir string
 	// Now supplies the current time; tests substitute it.
 	Now func() time.Time
@@ -52,9 +48,6 @@ func (j *Journal) Today() time.Time { return dateparse.Truncate(j.Now()) }
 
 // EntriesDir is the directory holding entry files.
 func (j *Journal) EntriesDir() string { return filepath.Join(j.Dir, EntriesDirName) }
-
-// TemplatePath is the optional template file for new entries.
-func (j *Journal) TemplatePath() string { return filepath.Join(j.Dir, TemplateFileName) }
 
 // EnsureDirs creates the journal and its entries directory.
 func (j *Journal) EnsureDirs() error {

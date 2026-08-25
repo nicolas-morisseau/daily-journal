@@ -14,6 +14,7 @@ func newRepo(t *testing.T) *Repo {
 	if err := CheckAvailable(); err != nil {
 		t.Skip("git is not installed")
 	}
+	unsignCommits(t)
 	repo := New(t.TempDir(), "main")
 	if err := repo.Init(); err != nil {
 		t.Skipf("git cannot commit in this environment: %v", err)
@@ -27,6 +28,18 @@ func newRepo(t *testing.T) *Repo {
 		}
 	}
 	return repo
+}
+
+// unsignCommits turns commit signing off for every git command this test
+// process runs, so a developer with `commit.gpgsign = true` does not have the
+// suite block on a passphrase prompt with nowhere to appear.
+func unsignCommits(t *testing.T) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_COUNT", "2")
+	t.Setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
+	t.Setenv("GIT_CONFIG_VALUE_0", "false")
+	t.Setenv("GIT_CONFIG_KEY_1", "tag.gpgsign")
+	t.Setenv("GIT_CONFIG_VALUE_1", "false")
 }
 
 func TestInitCreatesRepoAndGitignore(t *testing.T) {

@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
-
-	"daily-journal/internal/dateparse"
 )
 
 // WordCount counts whitespace-separated words, matching `wc -w`.
@@ -31,45 +28,14 @@ func WordCountFile(path string) int {
 	return WordCount(content)
 }
 
-// TemplateVars are the placeholders substituted into template.md.
-type TemplateVars struct {
-	Date       string
-	DayOfWeek  string
-	WeekNumber string
-	Time       string
-}
-
-// NewTemplateVars builds the placeholder set for an entry.
-//
-// `{{date}}` is the entry's date, while the remaining placeholders describe the
-// moment of creation, matching the bash implementation.
-func NewTemplateVars(entryDate string, now time.Time) TemplateVars {
-	return TemplateVars{
-		Date:       entryDate,
-		DayOfWeek:  now.Format("Monday"),
-		WeekNumber: dateparse.ISOWeek(now),
-		Time:       now.Format("15:04"),
-	}
-}
-
-// Render substitutes the placeholders in a template body.
-func (v TemplateVars) Render(template string) string {
-	return strings.NewReplacer(
-		"{{date}}", v.Date,
-		"{{day_of_week}}", v.DayOfWeek,
-		"{{week_number}}", v.WeekNumber,
-		"{{time}}", v.Time,
-	).Replace(template)
-}
-
 // NewEntryOptions configures the creation of a missing entry file.
 type NewEntryOptions struct {
 	// Date is the entry date in YYYY-MM-DD form.
 	Date string
 }
 
-// CreateEntry writes a new entry file and reports its path. It uses
-// template.md when present, otherwise just a date heading.
+// CreateEntry writes a new entry file, holding just a date heading, and reports
+// its path.
 //
 // It is a no-op when the file already exists.
 func (j *Journal) CreateEntry(opts NewEntryOptions) (path string, created bool, err error) {
@@ -81,24 +47,11 @@ func (j *Journal) CreateEntry(opts NewEntryOptions) (path string, created bool, 
 		return "", false, err
 	}
 
-	body, err := j.renderNewEntry(opts)
-	if err != nil {
-		return "", false, err
-	}
+	body := fmt.Sprintf("# %s\n\n", opts.Date)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return "", false, fmt.Errorf("creating entry %s: %w", path, err)
 	}
 	return path, true, nil
-}
-
-func (j *Journal) renderNewEntry(opts NewEntryOptions) (string, error) {
-	if template, err := Read(j.TemplatePath()); err == nil {
-		return NewTemplateVars(opts.Date, j.Now()).Render(template), nil
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("reading template %s: %w", j.TemplatePath(), err)
-	}
-
-	return fmt.Sprintf("# %s\n\n", opts.Date), nil
 }
 
 // QuickCapture appends a timestamped one-liner to the given day's entry,

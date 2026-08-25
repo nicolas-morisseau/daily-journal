@@ -20,7 +20,18 @@ const (
 	KeyEditor      = "EDITOR"
 	KeySprintStart = "SPRINT_START"
 	KeyProjectsDir = "PROJECTS_DIR"
+	// KeyDefaultJournal names the journal used when no other one is active.
+	KeyDefaultJournal = "DEFAULT_JOURNAL"
 )
+
+// EnvJournal overrides the active journal for one invocation. It is read from
+// the environment only: putting it in the config file would just be a second
+// spelling of DEFAULT_JOURNAL.
+const EnvJournal = "JOURNAL"
+
+// DefaultJournalName is the journal used by a root that has never been told
+// otherwise. It is also where the single journal of earlier versions is moved.
+const DefaultJournalName = "default"
 
 // AppName names the config directory under $XDG_CONFIG_HOME.
 const AppName = "daily-journal"
@@ -38,8 +49,22 @@ const DefaultGitBranch = "main"
 
 // Config is the resolved configuration for one invocation.
 type Config struct {
-	// JournalDir is the directory holding the journal.
-	JournalDir string
+	// JournalsRoot is the directory holding every journal. Each journal is one
+	// subdirectory of it, and the root itself is the git repository.
+	JournalsRoot string
+
+	// DefaultJournal is the journal used when nothing else selects one: the
+	// DEFAULT_JOURNAL key, or DefaultJournalName when it is unset.
+	DefaultJournal string
+
+	// ActiveJournal is the journal this invocation works on, resolved from the
+	// environment, then the state file, then DefaultJournal. It is a name, not
+	// a path, and the directory it names may not exist yet.
+	ActiveJournal string
+
+	// ActiveFrom names where ActiveJournal came from, for the help screen and
+	// for error messages that have to tell the user what to change.
+	ActiveFrom ActiveSource
 
 	GitBranch string
 	Autosync  bool
@@ -66,6 +91,40 @@ type Config struct {
 	// run, empty when nothing was migrated. The caller reports it so a rename
 	// never happens silently.
 	MigratedFrom string
+
+	// StatePath is the file recording the active journal, whether or not it
+	// exists. It is the only file the tool writes outside the journal itself.
+	StatePath string
+}
+
+// ActiveSource says which step of the resolution order picked the active
+// journal.
+type ActiveSource int
+
+const (
+	// FromDefault means nothing selected a journal, so DefaultJournal won.
+	FromDefault ActiveSource = iota
+	// FromState means `journal use` had recorded one.
+	FromState
+	// FromEnv means $JOURNAL was set.
+	FromEnv
+	// FromFlag means --journal was given on the command line. Load never
+	// returns it; the CLI sets it when it applies the flag.
+	FromFlag
+)
+
+// String names the source the way an error message should say it.
+func (s ActiveSource) String() string {
+	switch s {
+	case FromFlag:
+		return "--journal"
+	case FromEnv:
+		return "$" + EnvJournal
+	case FromState:
+		return "journal use"
+	default:
+		return KeyDefaultJournal
+	}
 }
 
 // Env abstracts the process environment so configuration is testable.
@@ -123,14 +182,15 @@ func Load(env Env) (*Config, error) {
 	dir, file := Paths(env)
 
 	cfg := &Config{
-		Dir:          dir,
-		Path:         file,
-		GitBranch:    DefaultGitBranch,
-		Editor:       env.get(KeyEditor),
-		JournalDir:   env.get(KeyJournalDir),
-		ProjectsDir:  env.get(KeyProjectsDir),
-		MigratedFrom: "",
-		Autosync:     false,
+		Dir:            dir,
+		Path:           file,
+		GitBranch:      DefaultGitBranch,
+		Editor:         env.get(KeyEditor),
+		JournalsRoot:   env.get(KeyJournalDir),
+		DefaultJournal: "",
+		ProjectsDir:    env.get(KeyProjectsDir),
+		MigratedFrom:   "",
+		Autosync:       false,
 	}
 
 	migratedFrom, err := migrateLegacy(env, dir, file)
@@ -145,12 +205,35 @@ func Load(env Env) (*Config, error) {
 	}
 	cfg.apply(vars)
 
-	if cfg.JournalDir == "" {
-		cfg.JournalDir = defaultJournalDir(env)
+	if cfg.JournalsRoot == "" {
+		cfg.JournalsRoot = defaultJournalDir(env)
 	}
-	cfg.JournalDir = expandHome(cfg.JournalDir, env.Home)
+	cfg.JournalsRoot = expandHome(cfg.JournalsRoot, env.Home)
 	cfg.ProjectsDir = expandHome(cfg.ProjectsDir, env.Home)
+	cfg.resolveActiveJournal(env)
 	return cfg, nil
+}
+
+// resolveActiveJournal picks the journal this invocation works on.
+//
+// Later sources win, from the most durable to the most immediate: the
+// configured default, then what `journal use` recorded, then $JOURNAL. The
+// --journal flag sits above all of them, but it is argv, so the CLI applies it
+// once the arguments are parsed.
+func (c *Config) resolveActiveJournal(env Env) {
+	_, c.StatePath = StatePaths(env)
+
+	if c.DefaultJournal == "" {
+		c.DefaultJournal = DefaultJournalName
+	}
+	c.ActiveJournal, c.ActiveFrom = c.DefaultJournal, FromDefault
+
+	if name := readActive(c.StatePath); name != "" {
+		c.ActiveJournal, c.ActiveFrom = name, FromState
+	}
+	if name := strings.TrimSpace(env.get(EnvJournal)); name != "" {
+		c.ActiveJournal, c.ActiveFrom = name, FromEnv
+	}
 }
 
 func (c *Config) apply(vars *shellVars) {
@@ -158,7 +241,7 @@ func (c *Config) apply(vars *shellVars) {
 		return
 	}
 	if v, ok := vars.get(KeyJournalDir); ok {
-		c.JournalDir = v
+		c.JournalsRoot = v
 	}
 	if v, ok := vars.get(KeyGitBranch); ok {
 		c.GitBranch = v
@@ -174,6 +257,9 @@ func (c *Config) apply(vars *shellVars) {
 	}
 	if v, ok := vars.get(KeyProjectsDir); ok {
 		c.ProjectsDir = v
+	}
+	if v, ok := vars.get(KeyDefaultJournal); ok {
+		c.DefaultJournal = v
 	}
 }
 

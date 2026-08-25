@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
 
+# GitHub's immutable releases attach a second attestation to every asset,
+# signed by dotcom.releases.github.com rather than by the project's own release
+# workflow. The aqua registry only knows about the latter, so mise fails the
+# install when it picks the wrong one. The registry's cosign verification and
+# the checksum still run.
+env:
+  MISE_AQUA_GITHUB_ATTESTATIONS: "false"
+
 jobs:
   release-label:
     name: release label
@@ -33,10 +41,30 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
+      # Installs the toolchain declared in mise.toml, so CI and a contributor's
+      # machine run the same Go. The action trusts the config itself.
+      - uses: jdx/mise-action@v4
 
-      - run: go vet ./...
-      - run: test -z "$(gofmt -l .)" || { gofmt -l .; false; }
-      - run: go test ./...
+      # mise caches its own tool installs; it knows nothing about the two
+      # directories `go` fills in the runner's home, which actions/setup-go used
+      # to restore for free. Asking `go` where they are beats hardcoding paths
+      # that depend on GOPATH.
+      - name: Locate the Go caches
+        id: go-cache
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.go-cache.outputs.build }}
+            ${{ steps.go-cache.outputs.mod }}
+          # A key of its own: the release job cross-compiles four targets and
+          # would otherwise fight this one over the same entry.
+          key: go-check-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-check-${{ runner.os }}-
+
+      # vet, formatting and tests, defined once in mise.toml. Adding a step
+      # there is enough — this gate cannot drift from what runs locally.
+      - run: mise run check
