@@ -66,3 +66,6 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}
+    # A called workflow gets no secrets unless asked, and release.yml needs
+    # HOMEBREW_TAP_SSH_KEY: without it GoReleaser skips the tap and stays green.
+    secrets: inherit
