@@ -45,6 +45,14 @@ const (
 	minEntryPaneWidth = 32
 )
 
+// Panes of the calendar view the keyboard can be on, in focus order. The git
+// panel is not one of them: it comes and goes, and J K reach it from either.
+const (
+	calendarGridPane = iota
+	calendarEntryPane
+	calendarPaneCount
+)
+
 // editorFinishedMsg is delivered once the foreground editor exits.
 type editorFinishedMsg struct{ err error }
 
@@ -73,6 +81,9 @@ type calendarModel struct {
 	hasEntry bool
 	// entryWords is the selected entry's word count.
 	entryWords int
+
+	// focus is the pane j and k act on: a week on the grid, a line in the notes.
+	focus int
 
 	// review is the sprint review shown over the calendar, nil while the calendar
 	// itself is on screen.
@@ -415,6 +426,9 @@ func (m calendarModel) apply(key string) (tea.Model, tea.Cmd) {
 	case "s":
 		return m, m.toggleGit()
 
+	case "tab", "shift+tab":
+		m.focus = (m.focus + 1) % calendarPaneCount
+
 	// Moving through the calendar.
 	case "left", "h":
 		m.shiftDay(-1)
@@ -431,11 +445,22 @@ func (m calendarModel) apply(key string) (tea.Model, tea.Cmd) {
 	case "t":
 		m.selectDay(m.source.Today())
 
-	// Scrolling the entry, as tock scrolls its detail pane.
+	// j and k are the arrows of the grid, or scroll the notes once they have the
+	// focus.
 	case "j":
-		m.entry.ScrollDown(1)
+		if m.gridFocused() {
+			m.shiftDay(7)
+		} else {
+			m.entry.ScrollDown(1)
+		}
 	case "k":
-		m.entry.ScrollUp(1)
+		if m.gridFocused() {
+			m.shiftDay(-7)
+		} else {
+			m.entry.ScrollUp(1)
+		}
+
+	// The grid has no use for these, so they scroll the notes whatever the focus.
 	case "ctrl+d":
 		m.entry.HalfPageDown()
 	case "ctrl+u":
@@ -452,6 +477,12 @@ func (m calendarModel) apply(key string) (tea.Model, tea.Cmd) {
 		m.git.ScrollUp(1)
 	}
 	return m, m.followSelection(before)
+}
+
+// gridFocused reports whether j and k move on the grid. On a terminal too narrow
+// for the grid, the notes are the only pane left and have the keyboard.
+func (m calendarModel) gridFocused() bool {
+	return m.focus == calendarGridPane && m.showCalendarPane()
 }
 
 // followSelection reloads what the selected day feeds when the day has moved.
@@ -535,8 +566,9 @@ const (
 )
 
 // handleMouse turns a mouse event into the moves the keyboard already makes: a
-// click picks the day or presses the hint it lands on, and the wheel pages the
-// month or scrolls the entry, depending on the pane it is over.
+// click picks the day or presses the hint it lands on, a click elsewhere in a pane
+// gives it the focus, and the wheel pages the month or scrolls the entry,
+// depending on the pane it is over.
 func (m calendarModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	before := m.selected
 
@@ -559,11 +591,19 @@ func (m calendarModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// anything clears the status line the hints sit under.
 	if day, ok := m.dayAt(msg.X, msg.Y); ok {
 		m.status, m.err = "", nil
+		m.focus = calendarGridPane
 		m.selectDay(day)
 		return m, m.followSelection(before)
 	}
+	// A hint is a key press, and the focus is what that key decides.
 	if key, ok := m.hintAt(msg.X, msg.Y); ok {
 		return m.apply(key)
+	}
+	switch {
+	case m.calendarBand().contains(msg.X, msg.Y):
+		m.focus = calendarGridPane
+	case m.entryBand().contains(msg.X, msg.Y):
+		m.focus = calendarEntryPane
 	}
 	return m, nil
 }
@@ -696,11 +736,11 @@ func (m calendarModel) View() string {
 
 	panes := make([]string, 0, 5)
 	if m.showCalendarPane() {
-		panes = append(panes, m.pane(m.renderCalendarPane(), calendarPaneWidth, 0), " ")
+		panes = append(panes, m.pane(m.renderCalendarPane(), calendarPaneWidth, 0, m.gridFocused()), " ")
 	}
 	panes = append(panes, m.renderCentreColumn())
 	if m.showInsight() {
-		panes = append(panes, " ", m.pane(m.renderInsightPane(), insightPaneWidth, m.paneContentHeight()))
+		panes = append(panes, " ", m.pane(m.renderInsightPane(), insightPaneWidth, m.paneContentHeight(), false))
 	}
 
 	return lipgloss.NewStyle().Padding(1, 1).Render(
@@ -712,12 +752,12 @@ func (m calendarModel) View() string {
 // they are arranged, the column comes out the same height as the panels either
 // side of it.
 func (m calendarModel) renderCentreColumn() string {
-	entry := m.pane(m.renderEntryPane(), m.entry.Width, m.entry.Height+paneHeadings)
+	entry := m.pane(m.renderEntryPane(), m.entry.Width, m.entry.Height+paneHeadings, !m.gridFocused())
 	if !m.gitOpen {
 		return entry
 	}
 
-	git := m.pane(m.renderGitPane(), m.git.Width, m.git.Height+paneHeadings)
+	git := m.pane(m.renderGitPane(), m.git.Width, m.git.Height+paneHeadings, false)
 	if m.gitBeside() {
 		return lipgloss.JoinHorizontal(lipgloss.Top, entry, " ", git)
 	}
@@ -747,15 +787,19 @@ const (
 	paneRows = paneHeadings + 2*paneBorder
 )
 
-// pane wraps content in a rounded border.
+// pane wraps content in a rounded border, in the accent when it has the focus.
 //
 // width is the content width: lipgloss counts padding inside Width, so it is
 // added back here, and every caller can think in terms of usable columns. A
 // height of zero leaves the pane as tall as what it holds.
-func (m calendarModel) pane(content string, width, height int) string {
+func (m calendarModel) pane(content string, width, height int, focused bool) string {
+	border := m.theme.Palette.Border
+	if focused {
+		border = m.theme.Palette.Accent
+	}
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Palette.Border).
+		BorderForeground(border).
 		Padding(0, panePadding).
 		Width(width + 2*panePadding)
 	if height > 0 {
@@ -798,6 +842,8 @@ var keyHints = [][2]string{
 	{"e", "edit entry"},
 	{"s", "git activity"},
 	{"r", "sprint review"},
+	// Last, so a short terminal drops it first: a click on the notes does the same.
+	{"tab", "pane"},
 }
 
 // quitHint sits at the bottom of the table whatever else fits above it.
@@ -806,8 +852,8 @@ var quitHint = [2]string{"q", "quit"}
 // hints is the navigation table as it ends up on screen. The clicking is driven
 // off the same list, so a row that is not up cannot be clicked either.
 //
-// Scrolling is not in it: j k on the notes, J K on the git panel and the wheel on
-// whichever the pointer is over are the keys everyone already tries.
+// Scrolling is not in it: j k on the focused pane, J K on the git panel and the
+// wheel on whichever the pointer is over are the keys everyone already tries.
 func (m calendarModel) hints() [][2]string {
 	// Drop the least useful rows rather than let the table run past the pane, the
 	// way the other views' footers give ground. Quitting keeps its place whatever

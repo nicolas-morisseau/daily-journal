@@ -48,6 +48,10 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyLeft}
 	case "right":
 		return tea.KeyMsg{Type: tea.KeyRight}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -202,11 +206,115 @@ func TestCalendarReportsEditorFailure(t *testing.T) {
 	}
 }
 
+// longEntryFixture is the calendar on a day whose notes run well past the pane,
+// so the centre pane has somewhere to scroll to.
+func longEntryFixture(t *testing.T) (calendarModel, time.Time) {
+	t.Helper()
+	m, source, today := newCalendarFixture(t)
+	appendTo(t, source.journal.EntriesDir()+"/2026-07-28.md",
+		strings.Repeat("\nanother line of the day\n", 60))
+	m.reload()
+	return m, today
+}
+
 func TestCalendarScrollKeysDoNotMoveTheSelection(t *testing.T) {
-	m, _, today := newCalendarFixture(t)
-	m = send(t, m, "j", "j", "k", "ctrl+d", "ctrl+u", "g", "G")
+	m, today := longEntryFixture(t)
+	m = send(t, m, "tab", "j", "j", "k", "ctrl+d", "ctrl+u", "g", "G")
 	if !m.selected.Equal(today) {
 		t.Errorf("scrolling the entry must not change the day, got %s", m.selected)
+	}
+	if m.entry.YOffset == 0 {
+		t.Error("G should have scrolled the entry to the bottom")
+	}
+}
+
+// TestCalendarJKMoveAWeekOnTheGrid is issue #1: the grid has the focus to begin
+// with, and there j and k are the vim spelling of ↓ and ↑.
+func TestCalendarJKMoveAWeekOnTheGrid(t *testing.T) {
+	m, today := longEntryFixture(t)
+	if m.focus != calendarGridPane {
+		t.Fatalf("focus = %d, want the grid first", m.focus)
+	}
+
+	m = send(t, m, "j")
+	if got := m.selected.Format("2006-01-02"); got != "2026-08-04" {
+		t.Errorf("j should move a week and cross into August, got %s", got)
+	}
+	if m.month.Month != time.August {
+		t.Errorf("month = %v, want August", m.month.Month)
+	}
+	m = send(t, m, "k")
+	if !m.selected.Equal(today) {
+		t.Errorf("k should come back a week, got %s", m.selected)
+	}
+	if m.entry.YOffset != 0 {
+		t.Errorf("j k on the grid scrolled the entry to %d", m.entry.YOffset)
+	}
+
+	// The keys the grid has no use for still scroll the notes from there.
+	m = send(t, m, "ctrl+d")
+	if m.entry.YOffset == 0 || !m.selected.Equal(today) {
+		t.Errorf("ctrl+d on the grid should scroll the entry, offset %d, day %s", m.entry.YOffset, m.selected)
+	}
+	m = send(t, m, "g")
+	if m.entry.YOffset != 0 {
+		t.Errorf("g should take the entry back to the top, offset %d", m.entry.YOffset)
+	}
+}
+
+// TestCalendarTabHandsJKToTheNotes: tab moves the focus between the grid and the
+// notes, and j k follow it while the arrows keep moving on the grid.
+func TestCalendarTabHandsJKToTheNotes(t *testing.T) {
+	m, today := longEntryFixture(t)
+
+	m = send(t, m, "tab")
+	if m.focus != calendarEntryPane {
+		t.Fatalf("tab should give the notes the focus, focus = %d", m.focus)
+	}
+	m = send(t, m, "j", "j", "j", "k")
+	if m.entry.YOffset != 2 {
+		t.Errorf("j j j k on the notes left them at %d, want 2", m.entry.YOffset)
+	}
+	if !m.selected.Equal(today) {
+		t.Errorf("j k on the notes moved the day to %s", m.selected)
+	}
+
+	// The arrows are the grid's whatever has the focus.
+	moved := send(t, m, "down")
+	if got := moved.selected.Format("2006-01-02"); got != "2026-08-04" {
+		t.Errorf("down with the notes focused should still move a week, got %s", got)
+	}
+	if moved.focus != calendarEntryPane {
+		t.Error("moving on the grid should not take the focus back")
+	}
+
+	for _, back := range []string{"tab", "shift+tab"} {
+		grid := send(t, m, back)
+		if grid.focus != calendarGridPane {
+			t.Errorf("%s should give the grid the focus back, focus = %d", back, grid.focus)
+		}
+		if got := send(t, grid, "j").selected.Format("2006-01-02"); got != "2026-08-04" {
+			t.Errorf("j after %s should move a week again, got %s", back, got)
+		}
+	}
+}
+
+// TestCalendarJKScrollWithoutTheGrid: too narrow for the grid, the notes are all
+// there is, so j k scroll them whatever the focus says.
+func TestCalendarJKScrollWithoutTheGrid(t *testing.T) {
+	m, today := longEntryFixture(t)
+	model, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 32})
+	m = model.(calendarModel)
+	if m.showCalendarPane() {
+		t.Fatal("60 columns should not hold the grid")
+	}
+
+	m = send(t, m, "j", "j")
+	if m.entry.YOffset != 2 {
+		t.Errorf("j j left the notes at %d, want 2", m.entry.YOffset)
+	}
+	if !m.selected.Equal(today) {
+		t.Errorf("j with no grid on screen moved the day to %s", m.selected)
 	}
 }
 

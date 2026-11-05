@@ -186,6 +186,12 @@ func TestCalendarClickOnAHintPressesIt(t *testing.T) {
 		t.Errorf("clicking the today hint selected %s", got.selected)
 	}
 
+	// The tab hint hands j k to the notes, like the key.
+	model, _ = m.Update(click(hints.x, rowOf("tab")))
+	if got := model.(calendarModel).focus; got != calendarEntryPane {
+		t.Errorf("clicking the tab hint left the focus on %d, want the notes", got)
+	}
+
 	if _, cmd := m.Update(click(hints.x, rowOf("e"))); cmd == nil || source.editCalls != 1 {
 		t.Errorf("clicking the edit hint should run the editor, %d calls", source.editCalls)
 	}
@@ -224,6 +230,51 @@ func TestCalendarWheelPagesMonthsOverTheGridAndScrollsTheEntry(t *testing.T) {
 	model, _ = scrolled.Update(scroll(entry.x+2, grid.y, -1))
 	if got := model.(calendarModel).entry.YOffset; got != 0 {
 		t.Errorf("the wheel back up left the entry at %d, want the top", got)
+	}
+}
+
+// TestCalendarClickMovesTheFocus: a click on a pane gives it the keyboard, the
+// way it does in the stand-up view, and the wheel scrolls without taking it.
+func TestCalendarClickMovesTheFocus(t *testing.T) {
+	m, today := longEntryFixture(t)
+	entry, grid := m.entryBand(), m.gridRect()
+
+	model, _ := m.Update(click(entry.x+paneContentInset, grid.y))
+	notes := model.(calendarModel)
+	if notes.focus != calendarEntryPane {
+		t.Fatalf("focus = %d, want the notes", notes.focus)
+	}
+	if !notes.selected.Equal(today) {
+		t.Errorf("clicking the notes moved the day to %s", notes.selected)
+	}
+	if got := send(t, notes, "j").entry.YOffset; got != 1 {
+		t.Errorf("j after clicking the notes left them at %d, want 1", got)
+	}
+
+	// The wheel over the grid pages a month, and leaves the keyboard where it is.
+	model, _ = notes.Update(scroll(grid.x, grid.y, 1))
+	if got := model.(calendarModel).focus; got != calendarEntryPane {
+		t.Errorf("the wheel moved the focus to %d", got)
+	}
+
+	// Anywhere on the grid's pane takes it back, the month title as well as a day.
+	model, _ = notes.Update(click(firstPaneX+paneContentInset, calendarPaneY+paneBorder))
+	titled := model.(calendarModel)
+	if titled.focus != calendarGridPane {
+		t.Errorf("clicking the month title left the focus on %d", titled.focus)
+	}
+	if !titled.selected.Equal(today) {
+		t.Errorf("clicking the month title moved the day to %s", titled.selected)
+	}
+
+	x, y := dayCell(notes, 15)
+	model, _ = notes.Update(click(x, y))
+	picked := model.(calendarModel)
+	if picked.focus != calendarGridPane {
+		t.Errorf("picking a day left the focus on %d, want the grid", picked.focus)
+	}
+	if got := send(t, picked, "j").selected.Format("2006-01-02"); got != "2026-07-22" {
+		t.Errorf("j after picking the 15th selected %s, want 2026-07-22", got)
 	}
 }
 
