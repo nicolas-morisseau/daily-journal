@@ -22,6 +22,9 @@ const (
 	KeyProjectsDir = "PROJECTS_DIR"
 	// KeyDefaultJournal names the journal used when no other one is active.
 	KeyDefaultJournal = "DEFAULT_JOURNAL"
+	// KeyMouse set to false leaves the mouse to the terminal in the interactive
+	// views, so the pointer selects text without holding shift.
+	KeyMouse = "MOUSE"
 )
 
 // EnvJournal overrides the active journal for one invocation. It is read from
@@ -82,6 +85,11 @@ type Config struct {
 	// commits from, by running git-standup there. Empty leaves the stand-up
 	// without its git side, which is not an error: the journal half still works.
 	ProjectsDir string
+
+	// Mouse is whether the interactive views capture the mouse for clicks and
+	// the wheel. Only MOUSE=false turns it off: any other value keeps the
+	// default, as AUTOSYNC keeps its own unless set to exactly true.
+	Mouse bool
 
 	// Path is the config file location, whether or not it exists.
 	Path string
@@ -191,6 +199,7 @@ func Load(env Env) (*Config, error) {
 		ProjectsDir:    env.get(KeyProjectsDir),
 		MigratedFrom:   "",
 		Autosync:       false,
+		Mouse:          true,
 	}
 
 	migratedFrom, err := migrateLegacy(env, dir, file)
@@ -260,6 +269,9 @@ func (c *Config) apply(vars *shellVars) {
 	}
 	if v, ok := vars.get(KeyDefaultJournal); ok {
 		c.DefaultJournal = v
+	}
+	if v, ok := vars.get(KeyMouse); ok {
+		c.Mouse = v != "false"
 	}
 }
 

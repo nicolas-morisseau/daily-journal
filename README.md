@@ -203,7 +203,9 @@ The mouse does the same work: click a day to select it, click a row of the
 NAVIGATE table to press the key it names, and turn the wheel to page months over
 the grid or to scroll the markdown over the middle panel. Mouse reporting is on
 in all three views, so selecting text with the pointer takes holding `shift` —
-what your terminal already does inside `vim` or `less`.
+what your terminal already does inside `vim` or `less`. With `MOUSE=false` in the
+[config file](#configuration) the views leave the mouse to the terminal: the
+pointer selects text as it does anywhere else, and the keyboard does the rest.
 
 #### What you committed that day
 
@@ -298,7 +300,8 @@ the line above their note instead.
 
 The mouse does the same work: click a pane to focus it, click the box to start
 typing and anywhere else to stop, click a footer hint to press the key it names,
-and turn the wheel to scroll whichever pane it sits over.
+and turn the wheel to scroll whichever pane it sits over. `MOUSE=false` turns
+this off, as in the calendar, and lets the pointer select text instead.
 
 Typing is a mode, so the shortcuts stay short: `i` opens the box, `enter` writes
 the line into today's entry exactly as `journal "a thought"` would and leaves the
@@ -390,7 +393,8 @@ mood tag labels the column, so the cards drop it; your other tags stay.
 The mouse does the same work: click a card to select it, its column taking the
 focus along, click a footer hint to press the key it names, and turn the wheel to
 scroll whichever column it sits over — reading around a mood without moving what
-is selected.
+is selected. `MOUSE=false` turns this off, as in the calendar, and lets the
+pointer select text instead.
 
 Paging moves by the window's own length: on the default fortnight, `p` twice
 lands a month back. The period itself is yours to choose:
@@ -457,9 +461,12 @@ SPRINT_START=2026-07-06
 
 # Repositories `journal daily` reads git activity from. Default: unset, no git half
 PROJECTS_DIR="$HOME/projects"
+
+# Leave the mouse to the terminal in the interactive views. Default: on
+MOUSE=false
 ```
 
-Those seven keys are all there is.
+Those eight keys are all there is.
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -470,6 +477,7 @@ Those seven keys are all there is.
 | `EDITOR` | `$EDITOR` | Quote it to pass arguments: `EDITOR="code --wait"`. |
 | `SPRINT_START` | unset | One `YYYY-MM-DD` date. Only `journal review` reads it, and only it fails on a bad value. |
 | `PROJECTS_DIR` | unset | Directory holding your repositories. Read by `journal daily` and by the calendar's `s` panel, which say so in place rather than failing. |
+| `MOUSE` | on | Only the exact string `false` turns it off: the calendar, `journal daily` and `journal review` then ignore clicks and the wheel, and the pointer selects text without `shift`. |
 
 <details>
 <summary><strong>File format details</strong></summary>

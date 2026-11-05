@@ -35,7 +35,7 @@ func reviewFixture(t *testing.T) (reviewModel, *fakeReviewSource) {
 	now := time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC)
 	source := &fakeReviewSource{journal: journal.New(dir, func() time.Time { return now })}
 
-	m := reviewModel{theme: Default, source: source, width: 140, height: 32}
+	m := reviewModel{theme: Default, source: source, width: 140, height: 32, mouse: true}
 	for i, mood := range journal.Moods {
 		m.columns[i].mood = mood
 		m.columns[i].view = viewport.New(minReviewColumnWidth, 10)

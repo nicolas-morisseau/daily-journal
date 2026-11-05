@@ -8,7 +8,7 @@ mechanics; [README.md](README.md#development) covers what the packages do.
 For anything more than a fix, open an issue first. It costs a few minutes and
 avoids the case where a finished pull request goes nowhere because the feature
 does not belong in the tool. `journal` stays small on purpose: plain markdown
-files, four config keys, git for history and sync.
+files, eight config keys, git for history and sync.
 
 Good first contributions: a new date expression in `internal/dateparse`, a new
 subcommand, a rough edge in the interactive views, anything in the README that

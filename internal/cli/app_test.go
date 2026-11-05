@@ -881,6 +881,24 @@ func TestCommandHelp(t *testing.T) {
 	assertUsageError(t, h.run("help", "open", "extra"), "help", "open", "extra")
 }
 
+// TestHelpListsEveryConfigKey: the help screen is where a key is found without
+// the README at hand.
+func TestHelpListsEveryConfigKey(t *testing.T) {
+	h := newHarness(t, "")
+	if err := h.run("help"); err != nil {
+		t.Fatal(err)
+	}
+	out := h.out()
+	for _, key := range []string{
+		config.KeyAutosync, config.KeyDefaultJournal, config.KeyGitBranch,
+		config.KeyJournalDir, config.KeyMouse, config.KeyProjectsDir, config.KeySprintStart,
+	} {
+		if !strings.Contains(out, key+"=") {
+			t.Errorf("help does not list %s", key)
+		}
+	}
+}
+
 // TestHelpDoesNotMentionRemovedFeatures guards against stale help text.
 func TestHelpDoesNotMentionRemovedFeatures(t *testing.T) {
 	h := newHarness(t, "")

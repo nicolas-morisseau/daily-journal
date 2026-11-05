@@ -83,5 +83,5 @@ func (a *App) calendar(monthArg string) error {
 		a.Printer.Printf("%s", ui.RenderCalendarStatic(a.Theme, a.Journal.Calendar(month)))
 		return nil
 	}
-	return ui.ShowCalendar(a.Theme, viewSource{app: a}, month)
+	return ui.ShowCalendar(a.Theme, viewSource{app: a}, month, a.Config.Mouse)
 }

@@ -181,6 +181,35 @@ func TestLoadProjectsDir(t *testing.T) {
 	}
 }
 
+// TestLoadMouse: the views keep the mouse unless the file says MOUSE=false, and
+// a value that is neither true nor false leaves the default rather than failing.
+func TestLoadMouse(t *testing.T) {
+	env := testEnv(t, nil)
+	if cfg, err := Load(env); err != nil {
+		t.Fatal(err)
+	} else if !cfg.Mouse {
+		t.Error("Mouse should default to true without a config file")
+	}
+
+	for content, want := range map[string]bool{
+		"MOUSE=false\n": false,
+		"MOUSE=\"false\"   # select text natively\n": false,
+		"MOUSE=true\n":  true,
+		"MOUSE=\n":      true,
+		"MOUSE=off\n":   true,
+		"MOUSE=FALSE\n": true,
+	} {
+		writeConfig(t, env, content)
+		cfg, err := Load(env)
+		if err != nil {
+			t.Fatalf("%q: %v", content, err)
+		}
+		if cfg.Mouse != want {
+			t.Errorf("%q: Mouse = %v, want %v", content, cfg.Mouse, want)
+		}
+	}
+}
+
 // TestLoadIgnoresRetiredKeys covers config files written for earlier versions:
 // keys that no longer exist must be skipped, never rejected.
 func TestLoadIgnoresRetiredKeys(t *testing.T) {
