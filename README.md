@@ -193,19 +193,26 @@ entry — creating it if needed — and picks the view back up when you quit.
 
 | Key | | Key | |
 | --- | --- | --- | --- |
-| `←` `→` | day | `j` `k` `^d` `^u` `g` `G` | scroll the entry |
-| `↑` `↓` | week | `e` / `enter` | edit the day |
+| `←` `→` | day | `tab` | focus the grid or the entry |
+| `↑` `↓` | week | `^d` `^u` `g` `G` | scroll the entry |
+| `j` `k` | week, or scroll the entry when it has the focus | `e` / `enter` | edit the day |
 | `n` `p` | month | `s` | git activity of that day |
 | `t` | today | `r` | sprint review of that day |
 | | | `q` | quit |
 
-The mouse does the same work: click a day to select it, click a row of the
-NAVIGATE table to press the key it names, and turn the wheel to page months over
-the grid or to scroll the markdown over the middle panel. Mouse reporting is on
-in all three views, so selecting text with the pointer takes holding `shift` —
-what your terminal already does inside `vim` or `less`. With `MOUSE=false` in the
-[config file](#configuration) the views leave the mouse to the terminal: the
-pointer selects text as it does anywhere else, and the keyboard does the rest.
+`j` `k` follow the focused pane, the one with the accent border. The grid has
+the focus to begin with, so there they move a week like `↓` `↑`; `tab` hands the
+focus to the entry, where they scroll it, and `tab` again brings it back. The
+arrows, `^d` `^u` `g` `G` do the same whichever pane has the focus.
+
+The mouse does the same work: click a day to select it, click a pane to focus
+it, click a row of the NAVIGATE table to press the key it names, and turn the
+wheel to page months over the grid or to scroll the markdown over the middle
+panel. Mouse reporting is on in all three views, so selecting text with the
+pointer takes holding `shift` — what your terminal already does inside `vim` or
+`less`. With `MOUSE=false` in the [config file](#configuration) the views leave
+the mouse to the terminal: the pointer selects text as it does anywhere else,
+and the keyboard does the rest.
 
 #### What you committed that day
 
@@ -238,7 +245,8 @@ reading and the rest of the view never waits for it. Holding an arrow key down
 does not queue a run per day either: one walk at a time, then a catch-up for
 wherever the selection ended up.
 
-Scroll it with the wheel over it, or with `J` `K`; `j` `k` stay on the notes.
+Scroll it with the wheel over it, or with `J` `K` whichever pane has the focus;
+`j` `k` stay with the grid or the notes.
 
 It reads through the same [git-standup and `PROJECTS_DIR`](#the-git-half) as the
 stand-up view. Without either, the panel says which one is missing and the rest of
