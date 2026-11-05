@@ -48,6 +48,9 @@ type reviewModel struct {
 	focus   int
 
 	width, height int
+	// mouse is whether the view captures the mouse. Off, clicks and the wheel go
+	// to the terminal, which then selects text natively.
+	mouse bool
 
 	// nested marks a review opened from the calendar, which quitting returns to.
 	nested bool
@@ -70,14 +73,15 @@ type reviewColumn struct {
 }
 
 // ShowReview runs the full-screen sprint review over the given period.
-func ShowReview(theme *Theme, source ReviewSource, opts journal.ReviewOptions) error {
+func ShowReview(theme *Theme, source ReviewSource, opts journal.ReviewOptions, mouse bool) error {
 	m := newReviewModel(theme, source, opts, TerminalWidth(), TerminalHeight())
-	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	m.mouse = mouse
+	_, err := tea.NewProgram(m, programOptions(mouse)...).Run()
 	return err
 }
 
 func newReviewModel(theme *Theme, source ReviewSource, opts journal.ReviewOptions, width, height int) reviewModel {
-	m := reviewModel{theme: theme, source: source, initial: opts}
+	m := reviewModel{theme: theme, source: source, initial: opts, mouse: true}
 	m.resize(width, height)
 	for i, mood := range journal.Moods {
 		m.columns[i].mood = mood
@@ -205,12 +209,12 @@ func (m reviewModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		if msg.err != nil {
 			m.err = msg.err
-			return m, mouseAgain
+			return m, mouseAgain(m.mouse)
 		}
 		if m.err == nil {
 			m.status = "Saved " + day.Format(dateparse.Layout) + ".md"
 		}
-		return m, mouseAgain
+		return m, mouseAgain(m.mouse)
 
 	case tea.KeyMsg:
 		return m.apply(msg.String())

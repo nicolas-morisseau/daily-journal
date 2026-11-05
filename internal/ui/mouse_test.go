@@ -600,6 +600,66 @@ func TestMouseIsReArmedAfterTheEditor(t *testing.T) {
 	}
 }
 
+// TestMouseStaysOffAfterTheEditorWhenNotWanted: with MOUSE=false the terminal
+// owns the mouse, and coming back from the editor must not take it back, nested
+// review included.
+func TestMouseStaysOffAfterTheEditorWhenNotWanted(t *testing.T) {
+	calendar, source, _ := newCalendarFixture(t)
+	calendar.mouse = false
+	review, _ := reviewFixture(t)
+	review.mouse = false
+	daily, _ := newDailyFixture(t)
+	daily.mouse = false
+
+	failed := review
+	failed.err = errTest
+
+	appendTo(t, source.journal.EntriesDir()+"/2026-07-28.md", "\n**09:00** - shipped it [#good]\n")
+	nested := send(t, calendar, "r")
+	if nested.review == nil {
+		t.Fatal("r should open the review")
+	}
+
+	for name, m := range map[string]tea.Model{
+		"calendar":      calendar,
+		"review":        review,
+		"failed review": failed,
+		"daily":         daily,
+		"nested review": nested,
+	} {
+		if _, cmd := m.Update(editorFinishedMsg{}); cmd != nil {
+			t.Errorf("%s: the editor's return sends %T, want nothing", name, cmd())
+		}
+	}
+}
+
+// TestProgramOptionsLeaveTheMouseToTheTerminal runs a program the way the views
+// start one and reads what it asks the terminal for.
+func TestProgramOptionsLeaveTheMouseToTheTerminal(t *testing.T) {
+	const cellMotion = "\x1b[?1002h"
+
+	for _, mouse := range []bool{true, false} {
+		var out strings.Builder
+		opts := append(programOptions(mouse), tea.WithInput(nil), tea.WithOutput(&out))
+		if _, err := tea.NewProgram(quitAtOnce{}, opts...).Run(); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(out.String(), cellMotion); got != mouse {
+			t.Errorf("mouse %v: mouse reporting requested = %v", mouse, got)
+		}
+		if !strings.Contains(out.String(), "\x1b[?1049h") {
+			t.Errorf("mouse %v: the alternate screen should be on either way", mouse)
+		}
+	}
+}
+
+// quitAtOnce is a program that stops as soon as it starts.
+type quitAtOnce struct{}
+
+func (quitAtOnce) Init() tea.Cmd                       { return tea.Quit }
+func (quitAtOnce) Update(tea.Msg) (tea.Model, tea.Cmd) { return quitAtOnce{}, nil }
+func (quitAtOnce) View() string                        { return "" }
+
 // TestReviewMouseWorksNestedInTheCalendar: the review opened from the calendar
 // gets the mouse events too, and clicking its footer comes back to the month.
 func TestReviewMouseWorksNestedInTheCalendar(t *testing.T) {

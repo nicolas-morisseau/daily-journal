@@ -26,11 +26,27 @@ func (r rect) contains(x, y int) bool {
 		y >= r.y && y < r.y+r.h
 }
 
+// programOptions are what every full-screen view starts with. Without the mouse,
+// the terminal keeps it, and dragging the pointer selects text as it does
+// anywhere else.
+func programOptions(mouse bool) []tea.ProgramOption {
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if mouse {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	return opts
+}
+
 // mouseAgain turns mouse reporting back on. Handing the terminal to the editor
 // releases it, and Bubble Tea puts the alternate screen and the bracketed paste
 // back afterwards but not the mouse, so every view asks for it again when the
-// editor comes back.
-var mouseAgain tea.Cmd = tea.EnableMouseCellMotion
+// editor comes back — unless it was started without the mouse.
+func mouseAgain(mouse bool) tea.Cmd {
+	if !mouse {
+		return nil
+	}
+	return tea.EnableMouseCellMotion
+}
 
 // leftClick reports whether the event is the left button going down. Releases
 // and drags are ignored: acting on the press is what makes a click feel

@@ -86,6 +86,9 @@ type dailyModel struct {
 	focus  int
 
 	width, height int
+	// mouse is whether the view captures the mouse. Off, clicks and the wheel go
+	// to the terminal, which then selects text natively.
+	mouse bool
 
 	// status is a transient message shown in place of the key hints.
 	status string
@@ -96,9 +99,10 @@ type dailyModel struct {
 
 // ShowDaily runs the full-screen stand-up view. It returns when the user quits;
 // notes are captured and entries edited in place rather than handed back.
-func ShowDaily(theme *Theme, source DailySource, days int) error {
+func ShowDaily(theme *Theme, source DailySource, days int, mouse bool) error {
 	m := newDailyModel(theme, source, days, TerminalWidth(), TerminalHeight())
-	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	m.mouse = mouse
+	_, err := tea.NewProgram(m, programOptions(mouse)...).Run()
 	return err
 }
 
@@ -123,6 +127,7 @@ func newDailyModel(theme *Theme, source DailySource, days, width, height int) da
 		loading: true,
 		width:   width,
 		height:  height,
+		mouse:   true,
 	}
 	m.reload()
 	return m
@@ -226,7 +231,7 @@ func (m dailyModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Saved " + m.source.Today().Format(dateparse.Layout) + ".md"
 		}
 		m.reload()
-		return m, mouseAgain
+		return m, mouseAgain(m.mouse)
 
 	case tea.KeyMsg:
 		if m.typing {

@@ -90,5 +90,5 @@ func (a *App) review(window reviewWindow) error {
 		a.Printer.Printf("%s", ui.RenderReviewStatic(a.Theme, result, ui.TerminalWidth()-2))
 		return nil
 	}
-	return ui.ShowReview(a.Theme, viewSource{app: a}, opts)
+	return ui.ShowReview(a.Theme, viewSource{app: a}, opts, a.Config.Mouse)
 }

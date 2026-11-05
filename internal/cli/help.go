@@ -34,6 +34,7 @@ var configRows = [][2]string{
 	{"DEFAULT_JOURNAL=default", "Journal used until 'journal use' says otherwise"},
 	{"GIT_BRANCH=main", "Branch used for pull and push"},
 	{`JOURNAL_DIR="$HOME/journal"`, "Where the journals live, one directory each"},
+	{"MOUSE=false", "Leave the mouse to the terminal, to select text in the views"},
 	{`PROJECTS_DIR="$HOME/projects"`, "Repositories 'journal daily' reads git activity from"},
 	{"SPRINT_START=2026-07-06", "First day of a sprint, for 'journal review'"},
 }

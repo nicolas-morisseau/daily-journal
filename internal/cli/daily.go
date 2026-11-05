@@ -89,7 +89,7 @@ func (a *App) daily(rawDays string) error {
 	}
 
 	if ui.Interactive() {
-		return ui.ShowDaily(a.Theme, viewSource{app: a}, days)
+		return ui.ShowDaily(a.Theme, viewSource{app: a}, days, a.Config.Mouse)
 	}
 
 	recap := a.Journal.Daily(journal.DailyOptions{Days: days})

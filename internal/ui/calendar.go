@@ -96,6 +96,9 @@ type calendarModel struct {
 	gitSpin    spinner.Model
 
 	width, height int
+	// mouse is whether the view captures the mouse. Off, clicks and the wheel go
+	// to the terminal, which then selects text natively.
+	mouse bool
 
 	// status is a transient message shown in place of the hints.
 	status string
@@ -106,8 +109,9 @@ type calendarModel struct {
 
 // ShowCalendar runs the full-screen calendar. It returns when the user quits;
 // entries are edited in place rather than handed back to the caller.
-func ShowCalendar(theme *Theme, source CalendarSource, month journal.Month) error {
+func ShowCalendar(theme *Theme, source CalendarSource, month journal.Month, mouse bool) error {
 	m := newCalendarModel(theme, source, TerminalWidth(), TerminalHeight())
+	m.mouse = mouse
 	m.setMonth(month)
 
 	// Land on today when it belongs to the requested month, otherwise the 1st.
@@ -118,7 +122,7 @@ func ShowCalendar(theme *Theme, source CalendarSource, month journal.Month) erro
 		m.selectDay(time.Date(month.Year, month.Month, 1, 0, 0, 0, 0, today.Location()))
 	}
 
-	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	_, err := tea.NewProgram(m, programOptions(mouse)...).Run()
 	return err
 }
 
@@ -134,6 +138,7 @@ func newCalendarModel(theme *Theme, source CalendarSource, width, height int) ca
 		gitSpin: spin,
 		width:   width,
 		height:  height,
+		mouse:   true,
 	}
 }
 
@@ -377,7 +382,7 @@ func (m calendarModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Saved " + m.selected.Format(dateparse.Layout) + ".md"
 		}
 		m.reload()
-		return m, mouseAgain
+		return m, mouseAgain(m.mouse)
 
 	case tea.KeyMsg:
 		return m.apply(msg.String())
@@ -467,6 +472,7 @@ func (m *calendarModel) openReview() {
 	}
 	review := newReviewModel(m.theme, m.source, opts, m.width, m.height)
 	review.nested = true
+	review.mouse = m.mouse
 	m.review = &review
 }
 
